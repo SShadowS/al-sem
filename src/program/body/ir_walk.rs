@@ -2845,15 +2845,65 @@ impl<'a> IrCfn<'a> {
     /// path walk looks for it; otherwise no hint.
     fn cond_call(&self, cond: ExprId, leaves: &[PCFNNode]) -> Option<PathHint> {
         let (e, negated) = self.cond_whole(cond);
-        let last = leaves.last()?;
-        if let Some(cs) = self.spine.cs_id_by_expr.get(&e) {
-            return (last.callsite_id.as_ref() == Some(cs))
-                .then_some(PathHint::CondCall { negated });
+        let cs = self.spine.cs_id_by_expr.get(&e)?;
+        (leaves.last()?.callsite_id.as_ref() == Some(cs)).then_some(PathHint::CondCall { negated })
+    }
+
+    /// ENG-177 (sol r1, r2): marks each top-level record-operation leaf of an `if`
+    /// condition whose Boolean value the branch decides ([`PCFNRare::missed_on`]);
+    /// whether any was marked. A leaf from a ternary alternative keeps its own walk.
+    fn mark_tested_ops(&self, cond: ExprId, leaves: &mut [PCFNNode]) -> bool {
+        let mut known = Vec::new();
+        self.tested_ops(cond, Some(true), Some(false), &mut known);
+        let mut any = false;
+        for (op, on_then, on_else) in known {
+            let missed = (on_then == Some(false), on_else == Some(false));
+            if missed == (false, false) {
+                continue;
+            }
+            for l in leaves.iter_mut().filter(|l| {
+                l.kind == "op" && l.operation_id.as_ref() == Some(op) && l.ternary_arm().is_none()
+            }) {
+                l.rare_mut().missed_on = Some(missed);
+                any = true;
+            }
         }
-        // ENG-177 (sol r1): a record operation with no call site (`A.Get(1)`, `A.FINDSET`).
-        let op = self.spine.op_id_by_expr.get(&e)?;
-        (last.kind == "op" && last.operation_id.as_ref() == Some(op))
-            .then_some(PathHint::CondOp { negated })
+        any
+    }
+
+    /// The record operations (with no call site) used as a Boolean in `e`, with the
+    /// value each is known to have on the `then` and the `else` branch, given `e`'s
+    /// (`None`: not known). `not` flips it; `X and Y` true means both true, `X or Y`
+    /// false means both false; any other operator says nothing about its operands.
+    fn tested_ops<'s>(
+        &'s self,
+        e: ExprId,
+        on_then: Option<bool>,
+        on_else: Option<bool>,
+        out: &mut Vec<(&'s String, Option<bool>, Option<bool>)>,
+    ) {
+        use ExprKind::*;
+        match &self.ir().expr(e).kind {
+            Parenthesized(x) => self.tested_ops(*x, on_then, on_else, out),
+            Unary {
+                op: UnaryOp::Not,
+                operand,
+            } => self.tested_ops(*operand, on_then.map(|b| !b), on_else.map(|b| !b), out),
+            Binary { op, lhs, rhs } if matches!(op, BinaryOp::And | BinaryOp::Or) => {
+                let kept = *op == BinaryOp::And;
+                let k = |v: Option<bool>| v.filter(|b| *b == kept);
+                for s in [lhs, rhs] {
+                    self.tested_ops(*s, k(on_then), k(on_else), out);
+                }
+            }
+            _ => {
+                if !self.spine.cs_id_by_expr.contains_key(&e)
+                    && let Some(op) = self.spine.op_id_by_expr.get(&e)
+                {
+                    out.push((op, on_then, on_else));
+                }
+            }
+        }
     }
 
     /// The condition's whole expression through parentheses and one `not`, and
@@ -2899,9 +2949,11 @@ impl<'a> IrCfn<'a> {
                 let mut n = cfn_node("if");
                 n.children = Some(vec![self.build_block(*then_block)]);
                 n.else_children = else_block.map(|b| vec![self.build_block(b)]);
-                let leaves = self.harvest_vec(*cond);
+                let mut leaves = self.harvest_vec(*cond);
                 if let Some(h) = self.cond_call(*cond, &leaves) {
                     n.rare_mut().path_hint = Some(h);
+                } else if self.mark_tested_ops(*cond, &mut leaves) {
+                    n.rare_mut().path_hint = Some(PathHint::CondOp);
                 }
                 n.condition_leaves = some_if(leaves);
                 n.condition_guard = self.simple_guard(*cond).map(Box::new);

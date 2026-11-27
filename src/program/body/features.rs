@@ -1028,6 +1028,10 @@ pub struct PCFNRare {
     /// expression's index, unique in the routine) and whether it is from the
     /// `then` alternative; the innermost ternary for a nested one.
     pub ternary_arm: Option<(usize, bool)>,
+    /// ENG-177 (sol r1, r2): on a record-operation leaf of an `if` condition whose
+    /// Boolean value the branch decides ([`PathHint::CondOp`]): whether the operation
+    /// is known to have found nothing on the `then` branch and on the `else` branch.
+    pub missed_on: Option<(bool, bool)>,
 }
 
 impl std::fmt::Debug for PCFNNode {
@@ -1066,6 +1070,9 @@ impl PCFNNode {
     }
     pub fn ternary_arm(&self) -> Option<(usize, bool)> {
         self.rare.as_ref().and_then(|r| r.ternary_arm)
+    }
+    pub fn missed_on(&self) -> Option<(bool, bool)> {
+        self.rare.as_ref().and_then(|r| r.missed_on)
     }
     pub fn table_case(&self) -> Option<&TableCase> {
         self.rare.as_ref().and_then(|r| r.table_case.as_ref())
@@ -1316,11 +1323,12 @@ pub enum PathHint {
     /// (through parentheses): whether it is negated. The call is the `if`'s
     /// last top-level condition leaf.
     CondCall { negated: bool },
-    /// ENG-177 (sol r1): on an `if` whose whole condition is a record operation
-    /// `A.Get(..)` / `not A.FindFirst()` (through parentheses), with no call site:
-    /// whether it is negated. The operation is the `if`'s last top-level condition
-    /// leaf; its Boolean result says on which branch it found (loaded) a record.
-    CondOp { negated: bool },
+    /// ENG-177 (sol r1, r2): on an `if` whose condition holds a record operation
+    /// with no call site whose Boolean result the branch decides (`if A.Get(1)`,
+    /// `if not A.FindFirst or B`, through parentheses, `not`, `and`, `or`): its
+    /// condition leaves carry [`PCFNRare::missed_on`]. A branch where it found
+    /// nothing has not loaded the record.
+    CondOp,
     /// On an `exit(true)` / `exit(false)`: the literal value.
     Exit(bool),
     /// On the node of an `asserterror` statement: an error inside is caught.

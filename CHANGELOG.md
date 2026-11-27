@@ -1276,14 +1276,21 @@ ran beside the timing).
     loop that does not settle, and a named record return value (`procedure F() R: Record X`):
     the model does not hold the name yet, so `R` is not tracked and never reported until ENG-209
     adds it (it starts unloaded, like a local).
-  - A tested load loads only on the branch where it found a record (sol r1):
+  - A tested load loads only where it found a record (sol r1, r2):
     `if A.Get(1) then exit; A.Modify()` is reported, `if not A.Get(1) then exit; A.Modify()` is
-    silent, with or without parentheses (`if A.FindFirst then`). The statement tree marks such a
-    condition with a `CondOp` hint, as it already marked a tested call. The r0 corpus's L2 feature
-    snapshot moves for the 65 routines with such an `if`: each row gains the `CondOp` hint and
-    nothing else (with the hint read as none, every hash equals the old golden).
+    silent, with or without parentheses (`if A.FindFirst then`), and inside `and`/`or`: past a
+    false `A.Get(1) or B` the Get found nothing (reported), past a false `A.Get(1) and B` it may
+    have (silent). The statement tree marks such an `if` with a `CondOp` hint and each tested
+    operation leaf with the branch it is known to have missed on (CDO: 28 lines mix a record
+    operation with `and`/`or` in a condition). The r0 corpus's L2 feature snapshot moves for the
+    routines with such an `if`: each row gains the `CondOp` hint and nothing else (with the hint
+    read as none, every hash equals the old golden).
   - A ternary's two alternatives are exclusive (sol r1): `Ok := B ? A.Get(1) : A.Modify()` is
-    reported. Each side is walked from the state before the ternary and the two are joined.
+    reported. Each side is walked from the state before the ternary and the two are joined. A
+    nested ternary, a ternary as an `if` condition and a `case` over a tested operation still
+    count the load as possible on every path (silent, as before; no false finding, since nothing
+    in an expression unloads a record): ENG-237 (CDO: 0 ternaries with a record operation, 1
+    such `case`).
   - The task asked instead for "loaded only when EVERY reaching assignment is loaded". Measured
     first: on CDO that rule moved no finding, and it would have made only the copy case strict
     while the direct case (`if B then A.Get(1)`) stays a "some path" rule.

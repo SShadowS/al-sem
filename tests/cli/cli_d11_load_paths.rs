@@ -416,6 +416,33 @@ codeunit 50501 "E Mgt"
         A.Modify();
     end;
 
+    // Reported (sol r2): reaching the Modify means the whole `or` was false, so Get found nothing.
+    procedure OrTestedExit(B: Boolean)
+    var A: Record "E Entry";
+    begin
+        if (A.Get(1)) or B then
+            exit;
+        A.Modify();
+    end;
+
+    // Silent: a false `and` says nothing about which side was false; Get may have found one.
+    procedure AndTestedExit(B: Boolean)
+    var A: Record "E Entry";
+    begin
+        if A.Get(1) and B then
+            exit;
+        A.Modify();
+    end;
+
+    // Silent: past a false `not Get or B`, `not Get` was false, so Get found a record.
+    procedure NotInOrExit(B: Boolean)
+    var A: Record "E Entry";
+    begin
+        if not A.Get(1) or B then
+            exit;
+        A.Modify();
+    end;
+
     // Reported (sol r1): a ternary's alternatives are exclusive; the Modify's has no load.
     procedure TernaryExclusive(B: Boolean)
     var
@@ -502,10 +529,12 @@ fn reported(dir: &Path, detector: &str) -> BTreeSet<String> {
 /// r2): any method called on the record loading it fails `PlatformMethodKeepsKill`; a terminating
 /// `Error` call site left unseen fails `ErrorArgKeepsKill`; unreachable code not marked seen fails
 /// `DeadLoadKeepsKill`. Each restored, passes. `ClearBuilds` guards the design (a `Clear` that unloaded, as the first draft did,
-/// reported it), not a line. sol r1 (red proofs run 2026-11-27, each restored and green): the
-/// tested operation's load kept on both branches fails `TestedGetExit` and `TestedFindExit`;
-/// `ir_walk::cond_call` setting no `CondOp` fails the same two; the ternary run walked in sequence
-/// fails `TernaryExclusive`; each side walked from an empty state instead of the run's entry fails
+/// reported it), not a line. sol r1 and r2 (red proofs run 2026-11-27, each restored and green):
+/// `may_load` reading the other branch's `missed_on` fails `TestedGetExit`, `TestedFindExit`,
+/// `OrTestedExit` and `NotTestedGetExit`; `ir_walk::tested_ops`'s `and` passing a false value to its
+/// operands fails `AndTestedExit`, its `or` passing none fails `OrTestedExit`, and `not` not
+/// flipping fails `NotInOrExit` and `NotTestedGetExit`; the ternary run walked in sequence fails
+/// `TernaryExclusive`; each side walked from an empty state instead of the run's entry fails
 /// `TernaryKeepsEntryLoad` (`TernaryLoadThenModify` alone stayed green under that break: its load
 /// is inside the ternary).
 #[test]
@@ -531,6 +560,7 @@ fn a_load_must_reach_the_operation_on_some_path() {
             "ErrorArgKeepsKill",
             "ErrorKills",
             "ExitKills",
+            "OrTestedExit",
             "ParenlessKill",
             "PlatformMethodKeepsKill",
             "TernaryExclusive",
