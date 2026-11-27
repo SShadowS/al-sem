@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed (TLS-145: a test that failed when a worker exited before reading its input)
+
+- `cli_ir_cache::a_worker_without_a_good_snapshot_fails_closed` could fail with `BrokenPipe`.
+  A worker whose cache snapshot is missing or damaged fails closed: it exits before it reads
+  its input from stdin. The test's helper (`hand_worker`) then wrote that input into a closed
+  pipe and stopped on the error. The test failed only when the worker happened to exit before
+  the write landed, which it did in TLS-130's landing on 2026-11-27. The helper now accepts a
+  closed pipe, as `cli_batch_writes`' helper already does. The test still judges the worker
+  by its exit code and output. Tests only; no product change.
+
 ### Fixed (ENG-213: a wrong "none observed" — `query touches --field --from` down searches dependency code past its first routine)
 
 - **The bug.** `query touches --field F --from R --direction down` searched R's cone over the solve's
