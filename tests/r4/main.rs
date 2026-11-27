@@ -9,6 +9,7 @@ mod symbol_app;
 mod r4_cross_app_program;
 mod r4_differential;
 mod r4_event_inventory;
+mod r4_table_name_scope;
 mod r4f_digest_effects;
 mod r4f_issue33_unmasked_physical_write;
 mod r4f_ordering_facts;

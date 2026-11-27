@@ -262,13 +262,19 @@ fn strip_trailing_temporary(s: &str) -> String {
 /// object number, e.g. `"5992"`) — to its internal `ModelTable.id`. A numeric ref is
 /// routed through the `Table` object-number index to recover the table name, then
 /// to the `ModelTable`. Returns `None` when nothing resolves (out-of-source table).
-fn resolve_table_ref_to_id(symbols: &SymbolTable, table_ref: &str) -> Option<String> {
+fn resolve_table_ref_to_id(symbols: &SymbolTable, from: &str, table_ref: &str) -> Option<String> {
+    // ENG-194: a name or number binds as seen from `from` (the referencing app
+    // guid): `SymbolTable::table_by_name_from` / `table_by_number_from`.
     if let Ok(number) = table_ref.trim().parse::<i64>() {
-        // Numeric (dep-symbol) form: object-number → table object → name → ModelTable.
-        let obj = symbols.object_by_type_number("Table", number)?;
-        return symbols.table_by_name(&obj.name).map(|t| t.id.clone());
+        // Numeric (dep-symbol) form, by number as the resolver binds a number
+        // (sol r1: no LAST-wins object-number index first).
+        return symbols
+            .table_by_number_from(from, number)
+            .map(|t| t.id.clone());
     }
-    symbols.table_by_name(table_ref).map(|t| t.id.clone())
+    symbols
+        .table_by_name_from(from, table_ref)
+        .map(|t| t.id.clone())
 }
 
 /// ENG-99: replace every routine's shared global record-variable rows by one resolved row per
@@ -286,6 +292,8 @@ pub(crate) fn share_resolved_globals(routines: &mut [ModelRoutine], symbols: &Sy
         (Arc<ModelRecordVariable>, Arc<ModelRecordVariable>),
     > = std::collections::HashMap::new();
     for r in routines.iter_mut() {
+        // A shared global row belongs to one object declaration, so to one app.
+        let app = r.app_guid.clone();
         for v in r.record_variables.iter_mut() {
             if v.scope.as_deref() != Some("global") {
                 continue;
@@ -295,7 +303,7 @@ pub(crate) fn share_resolved_globals(routines: &mut [ModelRoutine], symbols: &Sy
                 if let Some(tid) = row
                     .table_name
                     .as_deref()
-                    .and_then(|t| resolve_table_ref_to_id(symbols, t))
+                    .and_then(|t| resolve_table_ref_to_id(symbols, &app, t))
                 {
                     row.table_id = Some(crate::program::body::features::shared_table_text(&tid));
                 }
@@ -320,6 +328,8 @@ pub fn resolve_routine_record_types(
     // --- pass 1: resolve declared record variables ---------------------------
     // name (lowercased) -> index into record_variables, for matching ops below.
     use std::collections::HashMap;
+    // ENG-194: every table name below binds as seen from the routine's app.
+    let app = routine.app_guid.clone();
     let mut var_index_by_name: HashMap<String, usize> = HashMap::new();
     for (i, variable) in routine.record_variables.iter_mut().enumerate() {
         // intentionally last-wins — record_variables has no name duplicates at this layer (Task 3 global-promotion must preserve this invariant)
@@ -328,7 +338,7 @@ pub fn resolve_routine_record_types(
             // `resolve_table_ref_to_id` accepts a NAME or a NUMBER — a synthetic
             // implicit `Rec` seeded from a codeunit `TableNo = <number>` carries the
             // number string, which `table_by_name` alone could not resolve.
-            if let Some(tid) = resolve_table_ref_to_id(symbols, table_name)
+            if let Some(tid) = resolve_table_ref_to_id(symbols, &app, table_name)
                 && variable.table_id.as_deref() != Some(tid.as_str())
             {
                 // ENG-99: only a change writes, so a shared global row the declaration's
@@ -402,7 +412,7 @@ pub fn resolve_routine_record_types(
         else {
             continue;
         };
-        if let Some(table) = symbols.table_by_name(&table_name) {
+        if let Some(table) = symbols.table_by_name_from(&app, &table_name) {
             op.table_id = Some(table.id.clone());
         }
     }
@@ -417,19 +427,30 @@ pub fn resolve_routine_record_types(
     //                    extends target, then read ITS source_table_name).
     let own_table_id: Option<String> = match object {
         Some(obj) => match obj.object_type.as_str() {
-            "Table" => resolve_table_ref_to_id(symbols, &obj.name),
+            // ENG-194: a table's own `Rec` is that table, never another of its
+            // name; by name only when no row carries its own id.
+            "Table" => {
+                let own = format!("{}/table/{}", obj.app_guid, obj.object_number);
+                match symbols.table_by_id(&own) {
+                    Some(t) => Some(t.id.clone()),
+                    None => resolve_table_ref_to_id(symbols, &app, &obj.name),
+                }
+            }
             "Page" => obj
                 .source_table_name
                 .as_deref()
-                .and_then(|st| resolve_table_ref_to_id(symbols, st)),
+                .and_then(|st| resolve_table_ref_to_id(symbols, &app, st)),
             "TableExtension" => obj
                 .extends_target_name
                 .as_deref()
-                .and_then(|et| resolve_table_ref_to_id(symbols, et)),
+                .and_then(|et| resolve_table_ref_to_id(symbols, &app, et)),
             "PageExtension" => obj.extends_target_name.as_ref().and_then(|et| {
-                let base_page = symbols.object_by_type_name("Page", et)?;
+                // ENG-194 (sol r1): the base page as the extension's app sees it.
+                let base_page = symbols.object_by_type_name_from(&app, "Page", et)?;
                 let st = base_page.source_table_name.as_deref()?;
-                resolve_table_ref_to_id(symbols, st)
+                // Fable r1 S4: the base page's `SourceTable` is written in the
+                // base page's app, so it binds as that app sees it.
+                resolve_table_ref_to_id(symbols, &base_page.app_guid, st)
             }),
             _ => None,
         },
@@ -482,7 +503,7 @@ pub fn resolve_routine_record_types(
             for b in bindings {
                 let t = match b {
                     crate::program::recordref_table::Binding::Table { reference, .. } => {
-                        resolve_table_ref_to_id(symbols, reference)
+                        resolve_table_ref_to_id(symbols, &app, reference)
                     }
                     crate::program::recordref_table::Binding::GetTable(v) => routine
                         .record_variables
@@ -871,13 +892,14 @@ pub fn resolve_routine_record_types(
     // interference (both only upgrade → Known(true), never downgrade).
     //
     // A PageExtension's `Rec` is its BASE page's (#302 CR1): read the base page's
-    // flag, found by name like pass 3 (last-wins when several pages share it).
+    // flag, within the extension's app's closure (ENG-194, sol r2): known only
+    // when every `#if` alternative of the one page agrees
+    // (`SymbolTable::page_temporary_from`, Fable r4).
     let page_temp = |o: &ModelObject| match o.object_type.as_str() {
         "PageExtension" => o
             .extends_target_name
             .as_deref()
-            .and_then(|base| symbols.object_by_type_name("Page", base))
-            .and_then(|p| p.source_table_temporary),
+            .and_then(|base| symbols.page_temporary_from(&o.app_guid, base)),
         _ => o.source_table_temporary,
     };
     if object.and_then(page_temp) == Some(true) {

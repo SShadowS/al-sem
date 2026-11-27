@@ -13,9 +13,8 @@
 //! walked in al-sem's deterministic ingestion order, two extensions colliding on
 //! a field number resolve identically on both sides: the FIRST-ingested wins.
 
-use super::workspace::{ModelEntities, ModelField, ModelKey, ModelTable};
+use super::workspace::{ModelEntities, ModelField, ModelKey};
 use crate::engine::ids::{encode_field_id, encode_table_id};
-use al_syntax::IdentifierFoldExt;
 use std::collections::HashSet;
 
 /// Merge each TableExtension's fields into its base table's field set, mutating
@@ -26,10 +25,40 @@ use std::collections::HashSet;
 /// Port of the al-sem original `src/resolve/extension-fields.ts`. (Its R2.5a
 /// projected-entity twin in `deps::merged_index` was deleted in engine-switch S9.6;
 /// this is the only copy.)
-pub fn merge_extension_fields(workspace: &mut ModelEntities) {
-    // Resolve table-name → index and table-id → index up front (LAST-wins, to
-    // mirror the symbol table the TS pass queries). We must mutate tables in
-    // place, so we resolve indices, then apply.
+pub fn merge_extension_fields(
+    workspace: &mut ModelEntities,
+    scope: &super::symbol_table::TableScope,
+) {
+    // ENG-194 (Fable r1): each table extension's base as its own app sees it
+    // (`SymbolTable::table_by_name_from`, as the record types bind `Rec`), not
+    // the last table of the name. Worked out before the loop mutates the tables.
+    // Keyed by the object's ROW (Fable r2: an `#if`-split tableextension has a
+    // row per alternative, each with its own target).
+    let base_ids: Vec<Option<String>> = {
+        let symbols = super::symbol_table::SymbolTable::build_scoped(
+            &workspace.objects,
+            &workspace.tables,
+            scope,
+        );
+        workspace
+            .objects
+            .iter()
+            .map(|o| {
+                let target = o.extends_target_name.as_deref()?;
+                if o.object_type != "TableExtension" {
+                    return None;
+                }
+                let base = match target.trim().parse::<i64>() {
+                    Ok(n) => symbols.table_by_number_from(&o.app_guid, n),
+                    Err(_) => symbols.table_by_name_from(&o.app_guid, target),
+                }?;
+                Some(base.id.clone())
+            })
+            .collect()
+    };
+    // The bases are resolved above; each one's index (and the extension's
+    // stub's) is found per extension below. We must mutate tables in place,
+    // so we resolve indices, then apply.
     //
     // `objects.clone()` is a genuine borrow-conflict clone, not a stylistic
     // choice: the loop below reads `objects` while mutating `workspace.tables`
@@ -37,14 +66,34 @@ pub fn merge_extension_fields(workspace: &mut ModelEntities) {
     // `&mut *workspace` destructure into disjoint field borrows — a real
     // (if small, ~4 MB) edit, not a one-liner.
     let objects = workspace.objects.clone();
-    for object in &objects {
+    // Per tableextension row: which alternative of its id it is (0-based),
+    // and how many rows the id has.
+    let mut rows_of_id: std::collections::HashMap<&str, usize> = std::collections::HashMap::new();
+    let alternative: Vec<usize> = objects
+        .iter()
+        .map(|o| {
+            if o.object_type != "TableExtension" {
+                return 0;
+            }
+            let n = rows_of_id.entry(o.id.as_str()).or_insert(0);
+            *n += 1;
+            *n - 1
+        })
+        .collect();
+    for (row, object) in objects.iter().enumerate() {
         if object.object_type != "TableExtension" {
             continue;
         }
-        let Some(extends_target) = &object.extends_target_name else {
+        let Some(base_id) = &base_ids[row] else {
             continue;
         };
-        let Some(base_idx) = table_index_by_name(&workspace.tables, extends_target) else {
+        // The LAST real row of the id, the row `SymbolTable::table_by_id` keeps
+        // (an `#if`-split table has one per alternative; sol r2 on ENG-194).
+        let Some(base_idx) = workspace
+            .tables
+            .iter()
+            .rposition(|t| !t.is_extension_stub && &t.id == base_id)
+        else {
             continue;
         };
         // The extension's own STUB (G-5): its id reuses the extension's object
@@ -54,11 +103,24 @@ pub fn merge_extension_fields(workspace: &mut ModelEntities) {
         // took the table, so Sales Header got that table's fields and lost the
         // extension's.
         let extension_table_id = encode_table_id(&object.app_guid, object.object_number);
-        let Some(ext_idx) = workspace
+        // An `#if`-split tableextension has an object row and a stub per
+        // alternative, both in declaration order: the k-th row of the id takes
+        // the k-th stub (sol r3: every row took the LAST stub, so each target
+        // got the last alternative's fields). Counts that disagree keep the
+        // last stub, as before.
+        let stubs: Vec<usize> = workspace
             .tables
             .iter()
-            .rposition(|t| t.is_extension_stub && t.id == extension_table_id)
-        else {
+            .enumerate()
+            .filter(|(_, t)| t.is_extension_stub && t.id == extension_table_id)
+            .map(|(i, _)| i)
+            .collect();
+        let (alt, rows) = (alternative[row], rows_of_id[object.id.as_str()]);
+        let Some(&ext_idx) = (if stubs.len() == rows {
+            stubs.get(alt)
+        } else {
+            stubs.last()
+        }) else {
             continue;
         };
 
@@ -98,14 +160,48 @@ pub fn merge_extension_fields(workspace: &mut ModelEntities) {
         // fields, the extension's merged in, and the system fields: a key on
         // a base field (`key(K; "No.", "CDO Handled")`) keeps both.
         let ext_keys = workspace.tables[ext_idx].keys.clone();
+        // This alternative's own fields name its keys' members first (sol r9:
+        // an earlier alternative's field of the same name, merged into the
+        // base under another number, must not answer for this one's).
+        let own_fields: Vec<(String, String)> = workspace.tables[ext_idx]
+            .fields
+            .iter()
+            .map(|f| {
+                (
+                    al_syntax::fold_identifier(&f.name),
+                    encode_field_id(&base_table_id, f.field_number),
+                )
+            })
+            .collect();
         let base = &mut workspace.tables[base_idx];
-        let by_name: std::collections::HashMap<String, String> = base
+        let mut by_name: std::collections::HashMap<String, String> = base
             .fields
             .iter()
             .map(|f| (al_syntax::fold_identifier(&f.name), f.id.clone()))
             .collect();
+        by_name.extend(own_fields);
+        // The members of the keys EARLIER alternatives of this same extension
+        // (its own id prefix) added, taken before this alternative adds any:
+        // a later alternative repeating one of them adds none, but two keys of
+        // one alternative never match each other (sol r6).
+        let own_prefix = format!(
+            "{base_table_id}/key/ext/{}/{}/",
+            object.app_guid, object.object_number
+        );
+        // A key is the same key when its members AND the fields they resolve
+        // to agree (sol r8: two alternatives may declare a field of one name
+        // under different numbers).
+        let mut earlier: Vec<(Vec<String>, Vec<String>)> = if alt > 0 {
+            base.keys
+                .iter()
+                .filter(|b| b.id.starts_with(&own_prefix))
+                .map(|b| (b.members.clone(), b.fields.clone()))
+                .collect()
+        } else {
+            Vec::new()
+        };
         for (index, k) in ext_keys.iter().enumerate() {
-            let fields = k
+            let fields: Vec<String> = k
                 .members
                 .iter()
                 .filter_map(|name| {
@@ -117,12 +213,36 @@ pub fn merge_extension_fields(workspace: &mut ModelEntities) {
                     })
                 })
                 .collect();
-            let id = format!(
-                "{base_table_id}/key/ext/{}/{}/{index}",
-                object.app_guid, object.object_number
-            );
-            // Idempotent, as the field merge is.
+            // sol r4: a later `#if` alternative of the extension names its keys
+            // apart (`.../{index}/alt{k}`), or two alternatives on one base
+            // shared an id and the second's key was dropped. The first (or
+            // only) alternative keeps the id it always had.
+            let id = if alt == 0 {
+                format!(
+                    "{base_table_id}/key/ext/{}/{}/{index}",
+                    object.app_guid, object.object_number
+                )
+            } else {
+                format!(
+                    "{base_table_id}/key/ext/{}/{}/{index}/alt{alt}",
+                    object.app_guid, object.object_number
+                )
+            };
+            // Idempotent, as the field merge is; a key repeating one an
+            // earlier alternative added (`earlier`) adds none (Fable r5: never
+            // by name, never for an unsplit extension, never across apps).
             if base.keys.iter().any(|b| b.id == id) {
+                continue;
+            }
+            // Each earlier key stands for ONE repeat (sol r7): an alternative
+            // declaring two keys over fields an earlier one keyed once keeps
+            // the second. Skipped repeats are never added, so the keys under
+            // the prefix hold the most any one alternative declared.
+            if let Some(p) = earlier
+                .iter()
+                .position(|(m, f)| *m == k.members && *f == fields)
+            {
+                earlier.swap_remove(p);
                 continue;
             }
             base.keys.push(ModelKey {
@@ -133,18 +253,4 @@ pub fn merge_extension_fields(workspace: &mut ModelEntities) {
             });
         }
     }
-}
-
-/// `tableByName` semantics: case-insensitive, LAST-wins on collision, over
-/// real tables only (an extension stub carries the extension's name, never
-/// the base's, but is no base either).
-fn table_index_by_name(tables: &[ModelTable], name: &str) -> Option<usize> {
-    let want = name.fold_identifier();
-    let mut found = None;
-    for (i, t) in tables.iter().enumerate() {
-        if !t.is_extension_stub && t.name.fold_identifier() == want {
-            found = Some(i); // LAST-wins
-        }
-    }
-    found
 }
