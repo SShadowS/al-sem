@@ -81,9 +81,10 @@ LINT_PKGS=(-p al-sem -p al-sem-benches)
 run_fmt() { cargo fmt --check "${LINT_PKGS[@]}"; }
 
 # ⟨2026-11-15⟩ The orchestrator executor's own tests (scripts/agentflow/tests, pytest).
-# No gate ran them before, and two sat red on master unseen (TLS-71). They run
-# in `all` only: ~1.5-2 min, too slow for every task. CI does not run them (its
-# runner has no pytest), so `all` is their one gate.
+# No gate ran them before, and two sat red on master unseen (TLS-71). The whole
+# suite runs in `all` only: ~1.5-2 min, too slow for every task (`task` and
+# `task-affected` run one file of it, `gate-env` below). CI does not run them (its
+# runner has no pytest), so `all` is the suite's one gate.
 require_pytest() {
     python3 -m pytest --version >/dev/null 2>&1 && return 0
     echo "ci-steps: python3 with pytest is required for the agentflow suite (python3 -m pip install pytest)" >&2

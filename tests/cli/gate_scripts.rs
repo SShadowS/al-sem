@@ -2021,26 +2021,57 @@ fn ci_steps_all_runs_and_judges_the_agentflow_suite() {
 /// script that reads a new variable conftest neither clears nor keeps fails the
 /// task gate, not only the landing's `ci-steps all` (TLS-127's two cdo-slot
 /// variables did). `cargo` and the helper scripts are stubbed; the copy as it
-/// is passes `task`, and with one added script reading `TLS141_UNLISTED_KNOB`
+/// is passes both steps, and with one added script reading `TLS141_UNLISTED_KNOB`
 /// both steps fail at `gate-env`, naming it. Skipped only on GitHub CI, whose
 /// runner has no pytest.
 ///
-/// Mutation (2026-11-26): `gate-env` taken out of `task`'s step loop -> FAILED
-/// (the `task` run printed no `=== ci-steps: gate-env ===`); restored -> passed.
+/// Python runs with a scratch HOME, no user site and no plugin autoload, so
+/// nothing from the developer's home changes the result; a pytest installed
+/// only under the real HOME is found once and passed in by PYTHONPATH
+/// (TLS-141 review r1, sol).
+///
+/// Mutations (2026-11-26, r1 form re-checked 2026-11-27, each made with Edit):
+/// - `gate-env` taken out of `task`'s step loop -> FAILED (the clean `task` run
+///   printed no `=== ci-steps: gate-env ===`); restored -> passed.
+/// - `gate-env` taken out of `task-affected`'s step loop -> FAILED (the same
+///   check, on the clean `task-affected` run); restored -> passed.
 #[cfg(unix)]
 #[test]
 fn ci_steps_task_runs_the_gate_env_check() {
     use std::os::unix::fs::PermissionsExt;
-    let has_pytest = crate::clean_env::command("python3")
-        .args(["-m", "pytest", "--version"])
+    let dir = tempfile::tempdir().unwrap();
+    let home = dir.path().join("home");
+    std::fs::create_dir_all(&home).unwrap();
+    // pytest's site folder, asked of the real environment; passed on only when
+    // it is under the real HOME (a system pytest needs nothing).
+    let real_home = std::env::var("HOME").unwrap_or_default();
+    let pytest_site = crate::clean_env::command("python3")
+        .args([
+            "-c",
+            "import os, pytest; print(os.path.dirname(os.path.dirname(pytest.__file__)))",
+        ])
         .output()
-        .is_ok_and(|o| o.status.success());
+        .ok()
+        .filter(|o| o.status.success())
+        .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
+        .filter(|site| !real_home.is_empty() && site.starts_with(&real_home));
+    let isolated = |cmd: &mut std::process::Command| {
+        cmd.env("HOME", &home)
+            .env("PYTHONNOUSERSITE", "1")
+            .env("PYTEST_DISABLE_PLUGIN_AUTOLOAD", "1");
+        if let Some(site) = &pytest_site {
+            cmd.env("PYTHONPATH", site);
+        }
+    };
+    let mut probe = crate::clean_env::command("python3");
+    probe.args(["-m", "pytest", "--version"]);
+    isolated(&mut probe);
+    let has_pytest = probe.output().is_ok_and(|o| o.status.success());
     if !has_pytest && std::env::var_os("GITHUB_ACTIONS").is_some() {
         eprintln!("skip: no pytest on this CI runner");
         return;
     }
     assert!(has_pytest, "python3 with pytest is required");
-    let dir = tempfile::tempdir().unwrap();
     let (repo, bin, grammar) = (
         dir.path().join("repo"),
         dir.path().join("bin"),
@@ -2066,15 +2097,15 @@ fn ci_steps_task_runs_the_gate_env_check() {
     crate::git::run(&repo, &["init", "-q"]);
     let path = format!("{}:{}", bin.display(), std::env::var("PATH").unwrap());
     let run = |step: &str| {
-        let out = crate::clean_env::command("bash")
-            .arg(repo.join("scripts/ci-steps"))
+        let mut cmd = crate::clean_env::command("bash");
+        cmd.arg(repo.join("scripts/ci-steps"))
             .arg(step)
             .current_dir(&repo)
             .env("PATH", &path)
             .env("TREE_SITTER_AL_PATH", &grammar)
-            .env("CARGO_TARGET_DIR", dir.path().join("target"))
-            .output()
-            .expect("spawn bash scripts/ci-steps");
+            .env("CARGO_TARGET_DIR", dir.path().join("target"));
+        isolated(&mut cmd);
+        let out = cmd.output().expect("spawn bash scripts/ci-steps");
         let text = format!(
             "{}{}",
             String::from_utf8_lossy(&out.stdout),
@@ -2082,9 +2113,14 @@ fn ci_steps_task_runs_the_gate_env_check() {
         );
         (out.status.code(), text)
     };
-    let (code, text) = run("task");
-    assert_eq!(code, Some(0), "the copy as it is passes: {text}");
-    assert!(text.contains("=== ci-steps: gate-env ==="), "{text}");
+    for step in ["task", "task-affected"] {
+        let (code, text) = run(step);
+        assert_eq!(code, Some(0), "{step}: the copy as it is passes: {text}");
+        assert!(
+            text.contains("=== ci-steps: gate-env ==="),
+            "{step}: {text}"
+        );
+    }
     exe(
         repo.join("scripts/tls141-probe"),
         r#"echo "${TLS141_UNLISTED_KNOB:-off}""#,
