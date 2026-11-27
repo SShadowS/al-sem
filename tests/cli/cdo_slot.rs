@@ -1259,10 +1259,15 @@ fn cdo_slot_a_stuck_lock_fails_loudly_and_readers_go_on() {
 #[test]
 fn cdo_slot_a_reader_never_sees_a_half_written_status() {
     let s = Slot::new();
+    // The status write paused until the reads are done (a handshake: a fixed
+    // 3 s pause could end before a loaded test read once inside it).
     let mut writer = s.bg(
         "A",
         &["acquire", "lane", "halfway"],
-        &[("CDO_SLOT_TEST_WRITE_PAUSE_S", "3")],
+        &[
+            ("CDO_SLOT_TEST_WRITE_PAUSE_S", "60"),
+            ("CDO_SLOT_TEST_WRITE_RESUME", "/status"),
+        ],
     );
     s.wait_paused();
     let until_t = std::time::Instant::now() + std::time::Duration::from_millis(2000);
@@ -1280,6 +1285,7 @@ fn cdo_slot_a_reader_never_sees_a_half_written_status() {
         reads += 1;
     }
     assert!(reads > 0);
+    s.resume();
     assert_eq!(writer.0.wait().unwrap().code(), Some(0));
     let (_, text) = s.run("B", &["status"], &[]);
     assert!(text.starts_with("held by lane (halfway) since"), "{text}");
@@ -3185,16 +3191,17 @@ fn cdo_slot_timings_in_a_hand_hold() {
     // (`held=1`) a moment before the run writes its status (TLS-92's landing:
     // a `release` in that moment refused, honestly, with "its holder is still
     // writing its status", and the test expected "taken by a run"). The
-    // PUBLISH hook holds that moment open (2 s, no resume): a `release` inside
-    // it refuses and ends nothing; the test then waits for the published
-    // status, not for `held=1`.
+    // PUBLISH hook holds that moment open until the test resumes it (TLS-135:
+    // it was a fixed 2 s, which a loaded host's `release` could outlast): a
+    // `release` inside it refuses and ends nothing; the test then waits for the
+    // published status, not for `held=1`.
     // Mutation (2026-11-19): the wait for the published status dropped (the
     // second `release` goes in the same moment) -> "still writing its status"
     // instead of "taken by a run" (red); restored, green.
     let mut running = s.bg(
         "E",
         &["run", "lane", "took", "--", "sleep", "600"],
-        &[("CDO_SLOT_TEST_PAUSE_PUBLISH_S", "2")],
+        &[("CDO_SLOT_TEST_PAUSE_PUBLISH_S", "60")],
     );
     s.wait_paused();
     let (code, text) = s.run("E", &["release"], &[]);
@@ -3204,6 +3211,7 @@ fn cdo_slot_timings_in_a_hand_hold() {
         s.probe().starts_with("held=1"),
         "a refused release ended the hold"
     );
+    s.resume();
     until("the run's status is published", &|| {
         s.run("D", &["status"], &[])
             .1
@@ -4416,7 +4424,7 @@ fn cdo_slot_gate_entry_refuses_what_it_cannot_check() {
     let body = format!(
         "mkdir -p {d}/id {d}/timings; \
          flock -s {d}/timed.lock sleep 600 & l1=$!; flock -x {d}/id/timed.feedfeedfeedfeed sleep 600 & l2=$!; \
-         sleep 0.5; \
+         timeout 30 bash -c 'until ! flock -n -x {d}/timed.lock true && ! flock -n -s {d}/id/timed.feedfeedfeedfeed true; do sleep 0.05; done' || exit 9; \
          printf 'owner=old\\nreason=r\\nsince=2026-11-26T00:00:00Z\\npid=%s\\npid_start=1\\nkept=1\\n' $$ >{d}/timings/feedfeedfeedfeed; \
          bash '{gate_script}' fmt; rc=$?; pkill -P $l1; pkill -P $l2; kill $l1 $l2; exit $rc"
     );
@@ -4535,7 +4543,8 @@ fn cdo_slot_a_run_pauses_between_its_steps_for_a_timing() {
 }
 
 /// ⟨TLS-135 review r2, sol and Fable⟩ A timing that scans while a gate writes
-/// its record (CDO_SLOT_TEST_WRITE_PAUSE_S holds the write half done) neither
+/// its record (CDO_SLOT_TEST_WRITE_PAUSE_S with WRITE_RESUME holds the write
+/// half done until the test resumes it, once the timing runs) neither
 /// removes the record's temporary file (only exact `<pid>.<start>` names are
 /// judged) nor lets the gate build beside it: the record is complete before
 /// the decision, whatever the order of the lines around the ENTER hook.
@@ -4544,7 +4553,13 @@ fn cdo_slot_a_run_pauses_between_its_steps_for_a_timing() {
 /// name in `entries/` again -> the temporary file is removed, the gate cannot
 /// write its record and refuses (exit 1); the decision moved before the record
 /// write, the ENTER hook left after both (Fable's mutant) -> the gate builds
-/// beside the timing.
+/// beside the timing. Re-proved with the handshake (2026-11-27, after the
+/// TLS-135 landing failed): the first -> the gate refuses once its record's
+/// rename fails and never writes its second record ("never: a pause hook was
+/// reached", red); the second -> cargo-log `beside` (red); each restored,
+/// green. Under heavy load the old fixed 4 s pause failed 7/7 (the timing
+/// took 14-23 s to begin, after the gate had rightly found none and built);
+/// this version passed 55/55 under the same load.
 #[test]
 fn cdo_slot_a_timing_scan_during_a_record_write_neither_breaks_nor_misses_it() {
     let s = Slot::new();
@@ -4558,16 +4573,26 @@ fn cdo_slot_a_timing_scan_during_a_record_write_neither_breaks_nor_misses_it() {
             &gate,
             &script,
             &[],
-            &[("CDO_SLOT_TEST_WRITE_PAUSE_S", "4")],
+            &[
+                ("CDO_SLOT_TEST_WRITE_PAUSE_S", "60"),
+                // Only the entry record's writes pause.
+                ("CDO_SLOT_TEST_WRITE_RESUME", "/entries/"),
+            ],
         )
         .stdout(log_file(&log))
         .stderr(std::fs::OpenOptions::new().append(true).open(&log).unwrap())
         .spawn()
         .unwrap(),
     );
+    // The gate's record is half written (its temporary file only) until the
+    // timing has drained, committed and runs its command (`on`): a handshake,
+    // not a race against a fixed pause (the 2026-11-27 landing: under load the
+    // timing began after a 4 s pause had ended, so the gate rightly found no
+    // timing and built first).
     s.wait_paused();
     let mut timing = test_timing(&s, &[]);
     until("the timing runs", &|| t.join("on").exists());
+    s.resume();
     until("the gate decided", &|| {
         let l = std::fs::read_to_string(&log).unwrap_or_default();
         l.contains("waiting for the CDO timing")
@@ -4577,6 +4602,9 @@ fn cdo_slot_a_timing_scan_during_a_record_write_neither_breaks_nor_misses_it() {
     assert_eq!(cargo_log(), "", "the gate built beside the timing");
     std::fs::write(t.join("end"), "").unwrap();
     assert_eq!(timing.wait().unwrap().code(), Some(0));
+    // Its record again, after the wait: paused like the first.
+    s.wait_paused();
+    s.resume();
     let code = g.wait().unwrap().code();
     let text = std::fs::read_to_string(&log).unwrap_or_default();
     assert_eq!(code, Some(0), "{text}");

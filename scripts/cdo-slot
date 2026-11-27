@@ -201,7 +201,7 @@ glob_quote() { sed 's/[][*?\\]/\\&/g' <<<"$1"; }
 # test-hooks: CDO_SLOT_TEST_PAUSE_PUBLISH_S
 # test-hooks: CDO_SLOT_TEST_PAUSE_READ_S CDO_SLOT_TEST_PAUSE_REFUSE_S CDO_SLOT_TEST_PAUSE_S
 # test-hooks: CDO_SLOT_TEST_PAUSE_SPAWN_S CDO_SLOT_TEST_PAUSE_TAKE_S CDO_SLOT_TEST_SCAN_ONCE
-# test-hooks: CDO_SLOT_TEST_WRITE_PAUSE_S
+# test-hooks: CDO_SLOT_TEST_WRITE_PAUSE_S CDO_SLOT_TEST_WRITE_RESUME
 # test-hooks: CDO_SLOT_TEST_PAUSE_ENTER_S CDO_SLOT_TEST_PAUSE_ENTER_NAME CDO_SLOT_TEST_PAUSE_RETRY_S
 # test-hooks: CDO_SLOT_TEST_PAUSE_TIMED_GATE_S CDO_SLOT_TEST_PAUSE_KEEPER_S
 # test-hooks: CDO_SLOT_TEST_KEEPER_STOP CDO_SLOT_TEST_SPAWN_STEPS CDO_SLOT_TEST_COMMIT_FAIL
@@ -287,18 +287,27 @@ is_keeper_cmd() {
 write_atomic() {
     local tmp
     tmp="$1.w$$.$(new_id)"
-    if [[ -n "${CDO_SLOT_TEST_WRITE_PAUSE_S:-}" ]]; then
-        # Test hook: the first third, a pause, then the rest; a reader polling
-        # meanwhile must never see the part. One open file throughout, as the
-        # plain write: a temporary file removed in the pause fails the rename
-        # (TLS-135 review r2, sol), it is not made again.
+    # Test hook: the first third, a pause, then the rest; a reader polling
+    # meanwhile must never see the part. One open file throughout, as the
+    # plain write: a temporary file removed in the pause fails the rename
+    # (TLS-135 review r2, sol), it is not made again. With
+    # CDO_SLOT_TEST_WRITE_RESUME=<part of a path>, only the writes of such a
+    # path pause, and until the test says (`resume`, at most the seconds given):
+    # a test then acts inside the window however slow the host (TLS-135: a
+    # fixed pause ended before a loaded test had acted in it).
+    if [[ -n "${CDO_SLOT_TEST_WRITE_PAUSE_S:-}" ]] \
+        && [[ -z "${CDO_SLOT_TEST_WRITE_RESUME:-}" || "$1" == *"$CDO_SLOT_TEST_WRITE_RESUME"* ]]; then
         local n third wfd
         n=$(wc -l <<<"$2")
         third=$((n / 3))
         exec {wfd}>"$tmp"
         head -n "$third" <<<"$2" >&"$wfd"
-        : >"$dir/paused.$$"
-        sleep "$CDO_SLOT_TEST_WRITE_PAUSE_S"
+        if [[ -n "${CDO_SLOT_TEST_WRITE_RESUME:-}" ]]; then
+            test_pause "$CDO_SLOT_TEST_WRITE_PAUSE_S"
+        else
+            : >"$dir/paused.$$"
+            sleep "$CDO_SLOT_TEST_WRITE_PAUSE_S"
+        fi
         tail -n +"$((third + 1))" <<<"$2" >&"$wfd"
         exec {wfd}>&-
         mv -f "$tmp" "$1"
