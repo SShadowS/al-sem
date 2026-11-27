@@ -63,8 +63,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   it; a tableextension's fields are merged into the base table its own app sees
   (`merge_extension_fields`), not the last table of the name, each `#if` alternative of the
   extension with ITS OWN fields into its own target (before, every alternative took the last
-  alternative's fields; on master too), and into the last real row of an `#if`-split base (the row
-  every by-id reader keeps, as before).
+  alternative's fields; on master too: this fixes ENG-220), and into the last real row of an
+  `#if`-split base (the row every by-id reader keeps, as before).
 - **Symbol-only objects now carry `ObsoleteState`.** `obsolete_gone` was read from source only, so
   with a symbol-only Base Application both `No. Series` tables would have been live and the name
   would decline. BC 28.4's Base Application symbols list `No. Series` (308) and `Reason Code` (231)
