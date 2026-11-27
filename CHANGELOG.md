@@ -17,6 +17,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   closed pipe, as `cli_batch_writes`' helper already does. The test still judges the worker
   by its exit code and output. Tests only; no product change.
 
+### Fixed (TLS-141: the task gate now runs agentflow's gate-env check)
+
+- **The gap.** agentflow's `test_gate_env.py` fails when a gate script reads an environment
+  variable that its conftest neither clears nor keeps (`GATE_ENV_NAMES` / `GATE_ENV_KEPT`). Only
+  `ci-steps all` ran it, so a script change could pass `ci-steps task` and fail at landing. That
+  happened with TLS-127: `scripts/cdo-slot`'s new `CS_PUB_DEADLINE` and `CS_PUB_DEADLINE_WALL` cost
+  a whole landing cycle.
+- **The fix.** A new step, `ci-steps gate-env`, runs that one file with the same Python and pytest
+  call as `ci-steps agentflow` (it takes seconds). `task` and `task-affected` run it after `locale`.
+- **The test.** `gate_scripts::ci_steps_task_runs_the_gate_env_check` runs `task` and
+  `task-affected` on a scratch copy of `scripts/` with cargo stubbed: the copy as it is passes, and
+  one added script reading an unlisted variable makes both fail at `gate-env`. Python runs with a
+  scratch HOME, no user site, no PYTHONPATH and no pytest plugin autoload, so nothing in the
+  developer's home changes the result. If `python3` has no pytest that way, the test takes a venv
+  named by `ALSEM_TEST_PYTHON` (made absolute first, since the gate runs from a scratch folder;
+  refused when its folder holds no `python3`); otherwise it fails, and it skips only on GitHub CI, whose runner has
+  no pytest. Two discrimination proofs: with `gate-env` taken out of `task`'s step list, and then
+  out of `task-affected`'s, the test fails each time; restored, it passes.
+
 ### Fixed (ENG-213: a wrong "none observed" — `query touches --field --from` down searches dependency code past its first routine)
 
 - **The bug.** `query touches --field F --from R --direction down` searched R's cone over the solve's

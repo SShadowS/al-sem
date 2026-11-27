@@ -2016,6 +2016,185 @@ fn ci_steps_all_runs_and_judges_the_agentflow_suite() {
     assert!(text.contains("FAILED at 'agentflow'"), "{text}");
 }
 
+/// TLS-141 review r3 (sol): the bin folder of the venv `ALSEM_TEST_PYTHON` names,
+/// as an absolute path. The gate runs in a scratch folder, so a relative one
+/// (`.venv/bin/python3`) would name the wrong folder there. Made absolute, never
+/// canonicalized: a venv's python3 is a symlink, and resolving it leaves the venv.
+/// Refused when that folder holds no `python3` (the name the gate runs).
+#[cfg(unix)]
+fn test_python_bin(raw: &std::ffi::OsStr) -> Result<std::path::PathBuf, String> {
+    let py = std::path::absolute(raw).map_err(|e| format!("ALSEM_TEST_PYTHON={raw:?}: {e}"))?;
+    let bin = py
+        .parent()
+        .ok_or_else(|| format!("ALSEM_TEST_PYTHON={raw:?}: no folder"))?;
+    if !bin.join("python3").is_file() {
+        return Err(format!(
+            "ALSEM_TEST_PYTHON={raw:?}: no python3 in {}",
+            bin.display()
+        ));
+    }
+    Ok(bin.to_path_buf())
+}
+
+/// `test_python_bin` on a relative path (from this process's folder) to a stub
+/// venv: the answer is absolute and is the stub's bin folder; a relative path to
+/// a folder with no python3 is refused.
+///
+/// Mutation (2026-11-27, with Edit): `std::path::absolute(raw)` replaced by the
+/// raw path -> FAILED (the answer was `../../../tmp/.../venv/bin`, not
+/// absolute); restored -> passed.
+#[cfg(unix)]
+#[test]
+fn test_python_bin_makes_a_relative_venv_absolute() {
+    let tmp = tempfile::tempdir().unwrap();
+    let bin = tmp.path().join("venv/bin");
+    std::fs::create_dir_all(&bin).unwrap();
+    std::fs::write(bin.join("python3"), "#!/bin/sh\n").unwrap();
+    let cwd = std::env::current_dir().unwrap();
+    let up = "../".repeat(cwd.components().count() - 1);
+    let rel =
+        |p: &std::path::Path| std::path::PathBuf::from(&up).join(p.strip_prefix("/").unwrap());
+    let got = test_python_bin(rel(&bin.join("python3")).as_os_str()).unwrap();
+    assert!(got.is_absolute(), "{}", got.display());
+    assert_eq!(
+        got.canonicalize().unwrap(),
+        bin.canonicalize().unwrap(),
+        "{}",
+        got.display()
+    );
+    let empty = tmp.path().join("empty/bin");
+    std::fs::create_dir_all(&empty).unwrap();
+    let err = test_python_bin(rel(&empty.join("python3")).as_os_str()).unwrap_err();
+    assert!(err.contains("no python3"), "{err}");
+}
+
+/// TLS-141: `ci-steps task` and `task-affected` run agentflow's
+/// `test_gate_env.py` (real pytest, on a scratch copy of `scripts/`), so a
+/// script that reads a new variable conftest neither clears nor keeps fails the
+/// task gate, not only the landing's `ci-steps all` (TLS-127's two cdo-slot
+/// variables did). `cargo` and the helper scripts are stubbed; the copy as it
+/// is passes both steps, and with one added script reading `TLS141_UNLISTED_KNOB`
+/// both steps fail at `gate-env`, naming it. Skipped only on GitHub CI, whose
+/// runner has no pytest.
+///
+/// Python runs with a scratch HOME, no user site, no PYTHONPATH and no plugin
+/// autoload, so nothing from the developer's home changes the result (TLS-141
+/// reviews r1 and r2, sol). When `python3` has no pytest that way, the only
+/// other source is a venv named by `ALSEM_TEST_PYTHON` (its `python3`), whose
+/// bin folder, made absolute (`test_python_bin`), goes first on PATH; the user
+/// site is never added.
+///
+/// Mutations (2026-11-26, r1 form re-checked 2026-11-27, the second again on
+/// the r2 form; each made with Edit):
+/// - `gate-env` taken out of `task`'s step loop -> FAILED (the clean `task` run
+///   printed no `=== ci-steps: gate-env ===`); restored -> passed.
+/// - `gate-env` taken out of `task-affected`'s step loop -> FAILED (the same
+///   check, on the clean `task-affected` run); restored -> passed.
+#[cfg(unix)]
+#[test]
+fn ci_steps_task_runs_the_gate_env_check() {
+    use std::os::unix::fs::PermissionsExt;
+    let dir = tempfile::tempdir().unwrap();
+    let home = dir.path().join("home");
+    std::fs::create_dir_all(&home).unwrap();
+    // clean_env already drops PYTHONPATH.
+    let isolated = |cmd: &mut std::process::Command| {
+        cmd.env("HOME", &home)
+            .env("PYTHONNOUSERSITE", "1")
+            .env("PYTEST_DISABLE_PLUGIN_AUTOLOAD", "1");
+    };
+    let has_pytest = |python: &std::ffi::OsStr| {
+        let mut probe = crate::clean_env::command(python);
+        probe.args(["-m", "pytest", "--version"]);
+        isolated(&mut probe);
+        probe.output().is_ok_and(|o| o.status.success())
+    };
+    // Some(folder) = a venv's bin folder to put first on PATH; None = python3 as found.
+    let venv_bin = if has_pytest("python3".as_ref()) {
+        None
+    } else {
+        let venv = std::env::var_os("ALSEM_TEST_PYTHON")
+            .map(|raw| test_python_bin(&raw).unwrap_or_else(|e| panic!("{e}")));
+        match venv {
+            // The probe runs the very python3 the gate finds first on PATH.
+            Some(bin) if has_pytest(bin.join("python3").as_os_str()) => Some(bin),
+            _ if std::env::var_os("GITHUB_ACTIONS").is_some() => {
+                eprintln!("skip: no pytest on this CI runner");
+                return;
+            }
+            _ => panic!(
+                "python3 with pytest is required (without the user site): install it \
+                 system-wide, or set ALSEM_TEST_PYTHON to a venv's python3"
+            ),
+        }
+    };
+    let (repo, bin, grammar) = (
+        dir.path().join("repo"),
+        dir.path().join("bin"),
+        dir.path().join("grammar"),
+    );
+    let exe = |p: std::path::PathBuf, body: &str| {
+        std::fs::write(&p, format!("#!/usr/bin/env bash\n{body}\n")).unwrap();
+        std::fs::set_permissions(&p, std::fs::Permissions::from_mode(0o755)).unwrap();
+    };
+    crate::copy_dir(
+        std::path::Path::new(concat!(env!("CARGO_MANIFEST_DIR"), "/scripts")),
+        &repo.join("scripts"),
+    );
+    std::fs::create_dir_all(&bin).unwrap();
+    std::fs::create_dir_all(grammar.join("src")).unwrap();
+    std::fs::write(grammar.join("src/node-types.json"), "[]").unwrap();
+    // Not nextest-priority-check: a stub would drop it from test_gate_env's
+    // COMPUTED_READS scan; the real one finds no report, and `test` ignores that.
+    for s in ["tree-stamp", "require-rttime", "check-parse-path-locale"] {
+        exe(repo.join("scripts").join(s), "echo stub");
+    }
+    exe(bin.join("cargo"), "exit 0");
+    crate::git::run(&repo, &["init", "-q"]);
+    let venv = venv_bin.map(|b| format!("{}:", b.display()));
+    let path = format!(
+        "{}:{}{}",
+        bin.display(),
+        venv.unwrap_or_default(),
+        std::env::var("PATH").unwrap()
+    );
+    let run = |step: &str| {
+        let mut cmd = crate::clean_env::command("bash");
+        cmd.arg(repo.join("scripts/ci-steps"))
+            .arg(step)
+            .current_dir(&repo)
+            .env("PATH", &path)
+            .env("TREE_SITTER_AL_PATH", &grammar)
+            .env("CARGO_TARGET_DIR", dir.path().join("target"));
+        isolated(&mut cmd);
+        let out = cmd.output().expect("spawn bash scripts/ci-steps");
+        let text = format!(
+            "{}{}",
+            String::from_utf8_lossy(&out.stdout),
+            String::from_utf8_lossy(&out.stderr)
+        );
+        (out.status.code(), text)
+    };
+    for step in ["task", "task-affected"] {
+        let (code, text) = run(step);
+        assert_eq!(code, Some(0), "{step}: the copy as it is passes: {text}");
+        assert!(
+            text.contains("=== ci-steps: gate-env ==="),
+            "{step}: {text}"
+        );
+    }
+    exe(
+        repo.join("scripts/tls141-probe"),
+        r#"echo "${TLS141_UNLISTED_KNOB:-off}""#,
+    );
+    for step in ["task", "task-affected"] {
+        let (code, text) = run(step);
+        assert_eq!(code, Some(1), "{step}: {text}");
+        assert!(text.contains("FAILED at 'gate-env'"), "{step}: {text}");
+        assert!(text.contains("TLS141_UNLISTED_KNOB"), "{step}: {text}");
+    }
+}
+
 /// A warm build folder written by hand: one dependency, plus the two folders
 /// `scripts/seed-target` leaves out.
 fn warm_target(src: &tempfile::TempDir) {
