@@ -818,6 +818,44 @@ const REVIEW: &str = r#"codeunit 50640 "RV"
         L.Insert(); // S44B
     end;
 
+    procedure S45()
+    var
+        D: Record "RV Doc 45";
+    begin
+        D.DeleteAll(true);
+    end;
+
+    procedure S46()
+    var
+        D: Record "RV Doc 46";
+        I: Integer;
+    begin
+        for I := 1 to 2 do begin
+            Transmit(); // S46A
+            D.SetRange("No.", I);
+            D.DeleteAll(true);
+            Commit();
+        end;
+    end;
+
+    procedure S47()
+    begin
+        Report.Run(Report::"RV Batch 47");
+    end;
+
+    procedure S48()
+    var
+        D: Record "RV Doc 48";
+        I: Integer;
+    begin
+        for I := 1 to 2 do begin
+            Transmit(); // S48A
+            D."No." := I;
+            D.Insert(I = 2);
+            Commit();
+        end;
+    end;
+
     procedure S33()
     begin
         Transmit(); // S33A
@@ -993,6 +1031,69 @@ table 50646 "RV Doc 44"
             Commit();
         R.Transmit(); // S44A
     end;
+}
+
+table 50647 "RV Doc 45"
+{
+    fields { field(1; "No."; Integer) { } }
+    keys { key(PK; "No.") { Clustered = true; } }
+
+    trigger OnDelete()
+    var
+        R: Codeunit "RV";
+        L: Record "EB Log";
+    begin
+        L.Insert(); // S45B
+        R.Transmit(); // S45A
+        Commit();
+    end;
+}
+
+table 50648 "RV Doc 46"
+{
+    fields { field(1; "No."; Integer) { } }
+    keys { key(PK; "No.") { Clustered = true; } }
+
+    trigger OnDelete()
+    var
+        L: Record "EB Log";
+    begin
+        L.Insert(); // S46B
+    end;
+}
+
+table 50649 "RV Doc 48"
+{
+    fields { field(1; "No."; Integer) { } }
+    keys { key(PK; "No.") { Clustered = true; } }
+
+    trigger OnInsert()
+    var
+        L: Record "EB Log";
+    begin
+        L.Insert(); // S48B
+    end;
+}
+
+report 50650 "RV Batch 47"
+{
+    ProcessingOnly = true;
+
+    dataset
+    {
+        dataitem(Doc; "RV Doc 46")
+        {
+            trigger OnAfterGetRecord()
+            var
+                R: Codeunit "RV";
+                L: Record "EB Log";
+            begin
+                L.Insert(); // S47B
+                R.Transmit(); // S47A
+                Commit();
+            end;
+        }
+    }
 }
 
 codeunit 50642 "RV Logger"
@@ -1786,6 +1887,41 @@ fn s44_a_bulk_operation_on_a_s_route_blocks() {
         "{}",
         a.raw
     );
+}
+
+#[test]
+fn s45_a_bulk_operation_on_the_shared_prefix_blocks() {
+    // Review r5 (sol) item 1: both routes share the DeleteAll edge, so the
+    // meet routine is OnDelete. With two rows: A (row 1), Commit, B (row 2).
+    let a = ask(ws(), &rv("S45"), &at("S45A"), &at("S45B"));
+    assert_eq!(a.answer, "unknown", "{}", a.raw);
+    assert!(a.raw.contains("bulk-operation-on-route"), "{}", a.raw);
+}
+
+#[test]
+fn s46_a_trigger_that_may_not_fire_is_no_sure_b() {
+    // Review r5 (sol) item 2: B is in OnDelete, reached by a DeleteAll that
+    // may match no row. Pass 1 matches none: its Commit runs, then pass 2's
+    // DeleteAll runs B. Not cut at the first DeleteAll: yes.
+    let a = ask(ws(), &rv("S46"), &at("S46A"), &at("S46B"));
+    assert_eq!(a.answer, "yes", "{}", a.raw);
+}
+
+#[test]
+fn s47_a_report_dataitem_on_the_shared_prefix_blocks() {
+    // Reviews r5 (Fable issue 1): a batch job's OnAfterGetRecord runs once
+    // per row. Row 1's A, its Commit, then row 2's B.
+    let a = ask(ws(), &rv("S47"), &at("S47A"), &at("S47B"));
+    assert_eq!(a.answer, "unknown", "{}", a.raw);
+    assert!(a.raw.contains("repeated-trigger-on-route"), "{}", a.raw);
+}
+
+#[test]
+fn s48_a_non_literal_run_trigger_is_no_sure_b() {
+    // Reviews r5 (Fable issue 2): `Insert(I = 2)` runs OnInsert (B) only on
+    // pass 2; pass 1's Commit runs between A and that B: yes.
+    let a = ask(ws(), &rv("S48"), &at("S48A"), &at("S48B"));
+    assert_eq!(a.answer, "yes", "{}", a.raw);
 }
 
 #[test]

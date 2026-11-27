@@ -768,6 +768,11 @@ struct Walk<'a, 'w> {
     /// Whether a routine can reach itself over the edge graph (review r3
     /// item 1), memoized.
     self_reach: HashMap<&'a str, bool>,
+    /// Edges (from, to, site) the graph marks `TriggerFires::Maybe`: a
+    /// trigger of a bulk operation or a non-literal RunTrigger, a run into a
+    /// trigger that may not run or runs once per row (a report dataitem, an
+    /// XmlPort element, a page's OnAfterGetRecord) (reviews r5).
+    maybe_fire: HashSet<(&'a str, &'a str, &'a str)>,
     knobs: Knobs,
     commit_scopes: Option<crate::engine::l5::commit_scope::CbGraph<'a>>,
     group_paths: GroupPaths<'a>,
@@ -1306,6 +1311,11 @@ fn b_sure<'a>(w: &mut Walk<'a, '_>, route: &[Step<'a>], from: usize, b: &Resolve
     if trap.is_some() {
         return false;
     }
+    // Review r5 (sol) item 2: B is sure only if the route's edge fires
+    // whenever its site runs.
+    if !fires_surely(w, &s) {
+        return false;
+    }
     let Some(row) = w.reach.row_at(s.to, leave_id(route, from + 1, b)) else {
         return false;
     };
@@ -1319,6 +1329,91 @@ fn b_sure<'a>(w: &mut Walk<'a, '_>, route: &[Step<'a>], from: usize, b: &Resolve
         return false;
     }
     b_sure(w, route, from + 1, b)
+}
+
+/// Reviews r5 (sol item 2, Fable issue 2): whether route step `s` is a plain
+/// edge that must run its one target every time its site runs, the only
+/// edge a sure-B cut may stand on. A direct call, or a variable-typed call,
+/// implicit trigger or object run the graph does not mark `Maybe`, with no
+/// other edge at the same site. Never a table event (a bulk operation may
+/// match no row; a subscriber may be bound by hand), an interface call (one
+/// implementer of several runs, open or closed world), or an event edge.
+fn fires_surely<'a>(w: &Walk<'a, '_>, s: &Step<'a>) -> bool {
+    let Some(EdgeSite::Guarded(x)) = s.site else {
+        return false;
+    };
+    let edges = w.reach.out_edges(s.from);
+    let Some(&(_, _, kind, _)) = edges
+        .iter()
+        .find(|(to, site, _, _)| *to == s.to && *site == s.site)
+    else {
+        return false;
+    };
+    let plain = match kind {
+        "direct-call" => true,
+        "variable-typed-call" | "implicit-trigger" | "object-run-resolved" => {
+            !w.maybe_fire.contains(&(s.from, s.to, x))
+        }
+        _ => false,
+    };
+    plain
+        && !edges
+            .iter()
+            .any(|(to, site, _, _)| *site == s.site && *to != s.to)
+}
+
+/// Reviews r4 item 2 and r5 (sol item 1, Fable issue 1): whether route step
+/// `s` may run its target more than once per run of its site, and why: a
+/// trigger or table event of a bulk record operation (once per row), or of
+/// an operation the model does not hold; or a variable-typed call or object
+/// run the graph marks `Maybe` (a report dataitem's or XmlPort element's
+/// trigger, once per row; a page's `OnAfterGetRecord`).
+fn may_repeat<'a>(w: &Walk<'a, '_>, s: &Step<'a>) -> Option<(&'static str, &'static str)> {
+    let Some(EdgeSite::Guarded(x)) = s.site else {
+        return None;
+    };
+    let kind = w
+        .reach
+        .out_edges(s.from)
+        .into_iter()
+        .find(|(to, site, _, _)| *to == s.to && *site == s.site)
+        .map(|e| e.2)?;
+    match kind {
+        "implicit-trigger" | "table-event" => match op_of(w, s.from, x) {
+            Some(o) if is_bulk(o) => Some((
+                "bulk-operation-on-route",
+                "by a bulk record operation whose trigger runs once per row",
+            )),
+            Some(_) => None,
+            None => Some((
+                "bulk-operation-on-route",
+                "by a record operation the model does not hold; whether it is a bulk operation \
+                 (its trigger run once per row) is not known",
+            )),
+        },
+        "variable-typed-call" | "object-run-resolved"
+            if w.maybe_fire.contains(&(s.from, s.to, x)) =>
+        {
+            Some((
+                "repeated-trigger-on-route",
+                "into an object trigger that may run once per row or not at all (a report \
+                 dataitem, an XmlPort element, a page's record trigger)",
+            ))
+        }
+        _ => None,
+    }
+}
+
+/// The record operation (its name) with id `x` in `routine`'s row.
+fn op_of<'a>(w: &Walk<'a, '_>, routine: &'a str, x: &str) -> Option<&'a str> {
+    w.reach
+        .row_at(routine, x)
+        .and_then(|row| row.record_operations.iter().find(|o| o.id == x))
+        .map(|o| o.op.as_str())
+}
+
+fn is_bulk(op: &str) -> bool {
+    op.eq_fold_identifier("ModifyAll") || op.eq_fold_identifier("DeleteAll")
 }
 
 /// The ids the route leaves its routine at, at position `i` (the target's own
@@ -1348,6 +1443,39 @@ fn trap_of<'a>(w: &Walk<'a, '_>, s: &Step<'a>) -> Option<TrapKind> {
         .into_iter()
         .find(|(to, site, _, _)| *to == s.to && *site == s.site)
         .and_then(|e| e.3)
+}
+
+/// The (from, to, site) of every edge marked `TriggerFires::Maybe`.
+fn maybe_fire_edges(tree: &CapabilitySnapshot) -> HashSet<(&str, &str, &str)> {
+    use crate::engine::l4::combined_graph::TriggerFires::Maybe;
+    use crate::engine::l5::snapshot::SnapshotGraphEdge as E;
+    tree.typed_edges
+        .iter()
+        .filter_map(|e| match e {
+            E::ImplicitTrigger {
+                from,
+                to,
+                operation_id: site,
+                fires: Maybe,
+                ..
+            }
+            | E::VariableTypedCall {
+                from,
+                to,
+                callsite_id: site,
+                fires: Some(Maybe),
+                ..
+            }
+            | E::ObjectRunResolved {
+                from,
+                to,
+                callsite_id: site,
+                fires: Some(Maybe),
+                ..
+            } => Some((from.as_str(), to.as_str(), site.as_str())),
+            _ => None,
+        })
+        .collect()
 }
 
 /// The answer of `commit-between` for `root` (module doc).
@@ -1404,6 +1532,7 @@ pub(crate) fn compute<'a>(
         cones: HashMap::new(),
         region_folded: HashSet::new(),
         self_reach: HashMap::new(),
+        maybe_fire: maybe_fire_edges(tree),
         knobs: sites.knobs.clone(),
         commit_scopes: crate::engine::l5::commit_scope::CbGraph::of_tree(tree),
         group_paths: GroupPaths::new(&tree.typed_edges, model),
@@ -1596,11 +1725,14 @@ fn pair<'a>(
     for s in ra[k..].iter().chain(&rb[k..]) {
         site_co_edges(w, s);
     }
-    // Review r4 item 2: a bulk operation on A's route runs its trigger once
-    // per row; the later runs before A are on no part. (On B's side the next
-    // B is the first row's, whose head is walked.)
-    for s in &ra[k..] {
-        bulk_leave(w, s);
+    // Review r4 item 2, reviews r5: a step that may run its target more than
+    // once (a bulk operation, a per-row object trigger) anywhere on A's
+    // route, the shared prefix included, runs A's part or M itself again;
+    // those runs are on no part. B's route below M is checked too, as the
+    // safe side (the next B is the first run's, whose head is walked; a run
+    // that may not reach B is no sure B, `fires_surely`).
+    for s in ra.iter().chain(&rb[k..]) {
+        repeat_blocker(w, s);
     }
     let mut parts: Vec<Part<'a>> = Vec::new();
     // A's tail, deepest first.
@@ -1958,48 +2090,16 @@ fn site_co_edges<'a>(w: &mut Walk<'a, '_>, s: &Step<'a>) {
     }
 }
 
-/// Review r4 item 2: route step `s` leaves its routine by a bulk record
-/// operation (`ModifyAll`, `DeleteAll`), whose trigger or table event runs
-/// once per matching row: a loop the control-flow tree does not show. Not
-/// followed: a blocker.
-fn bulk_leave<'a>(w: &mut Walk<'a, '_>, s: &Step<'a>) {
-    let Some(EdgeSite::Guarded(x)) = s.site else {
-        return;
-    };
-    // Only a trigger or table event leaves by a record operation.
-    let by_op = w
-        .reach
-        .out_edges(s.from)
-        .into_iter()
-        .any(|(to, site, kind, _)| {
-            to == s.to && site == s.site && matches!(kind, "implicit-trigger" | "table-event")
-        });
-    if !by_op {
-        return;
+/// A route step that may run its target more than once ([`may_repeat`]): a
+/// loop the control-flow tree does not show. Not followed: a blocker.
+fn repeat_blocker<'a>(w: &mut Walk<'a, '_>, s: &Step<'a>) {
+    if let Some((kind, why)) = may_repeat(w, s) {
+        let d = w.display(s.from);
+        w.out.blockers.push((
+            kind,
+            format!("the route leaves {d} {why}; its other runs around A and B are not followed"),
+        ));
     }
-    // The operation, from the row that holds the site; not found is not
-    // known not to be bulk (coordinator r4: block, never a silent `no`).
-    let op = w
-        .reach
-        .row_at(s.from, x)
-        .and_then(|row| row.record_operations.iter().find(|o| o.id == x))
-        .map(|o| o.op.as_str());
-    let detail = match op {
-        Some(o) if o.eq_fold_identifier("ModifyAll") || o.eq_fold_identifier("DeleteAll") => {
-            "by a bulk record operation whose trigger runs once per row; its later runs before A \
-             are not followed"
-        }
-        Some(_) => return,
-        None => {
-            "by a record operation the model does not hold; whether it is a bulk operation (its \
-             trigger run once per row) is not known"
-        }
-    };
-    let d = w.display(s.from);
-    w.out.blockers.push((
-        "bulk-operation-on-route",
-        format!("the route to A leaves {d} {detail}"),
-    ));
 }
 
 /// Review B1: a site of `row` that may matter (an edge leaves it, or a

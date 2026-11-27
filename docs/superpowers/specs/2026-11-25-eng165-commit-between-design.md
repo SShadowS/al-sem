@@ -11,9 +11,10 @@ confirmation are folded in (§11). Ready to implement. Task card: `/coord/tasks/
   it. Two findings needed new BC measurements (§2.4, round 2). Both changed the design: a
   `Commit()` inside an isolated subscriber commits the caller's work, and `Page.RunModal` with a
   pending write is an error when no test handler stands in.
-- Revisions 3.2 to 3.4 answer Fable's reviews of the implementation (rounds 2 to 4): the
-  blockers for a loop above the meet routine, recursion on a route, sibling subscribers, other
-  edges at a leave site and a bulk operation on A's route (§4.1); the `route-search-capped`
+- Revisions 3.2 to 3.5 answer the reviews of the implementation (Fable rounds 2 to 4, sol
+  round 5): the blockers for a loop above the meet routine, recursion on a route, sibling
+  subscribers, other edges at a leave site, a bulk operation or a repeated object trigger on A's
+  route, and a sure-B cut only at edges that surely fire (§4.1); the `route-search-capped`
   relation and what a path that ends before B leaves out (§5.3).
 
 ## 1. The question
@@ -341,13 +342,35 @@ through B's head, which is walked; B's route is checked too, as the safe side. E
 does not list repeats a routine, and that routine stays on a listed route. Revision 3.3 checked
 only the prefix and M, which Fable's review r4 showed was too narrow.
 
-**A bulk record operation on A's route** (revision 3.4, Fable review r4): `ModifyAll(true)` and
-`DeleteAll(true)` run their trigger (and a table event's subscribers) once per matching row. When
-A's route leaves a routine, from M down, through such an operation, a later row's run of the
-statements before A is in no part. The blocker `bulk-operation-on-route` (shape S44: `OnDelete:
-if "No." = 2 then Commit; A`, root `D.DeleteAll(true); B`). B's side needs no check: the next
-B after A is the first row's, whose head is walked. When a trigger or table-event step's
-record operation cannot be found in the model, it is not known not to be bulk: the same blocker.
+**Every route edge fires once per pass** (revisions 3.4 and 3.5, Fable reviews r4 and r5, sol
+review r5). The parts read each route edge as running its target exactly once each time its site
+runs. Where that does not hold, the answer is `unknown` or the cut is not taken. The graph already
+marks the edges whose target may not run, or runs once per row, `TriggerFires::Maybe`:
+- *More than once, on A's route, the shared prefix included.* A step that may run its target
+  more than once runs A's part, or M itself, again; those runs are in no part. Two blockers:
+  `bulk-operation-on-route` for a trigger or table-event step of a bulk record operation
+  (`ModifyAll`, `DeleteAll`: once per matching row), or of a record operation the model does not
+  hold (not known not to be bulk); `repeated-trigger-on-route` for a variable-typed call or object
+  run marked `Maybe` (a report dataitem's or XmlPort element's trigger, once per row; a page's
+  `OnAfterGetRecord`). Shapes: S44 (`OnDelete: if "No." = 2 then Commit; A`, root
+  `D.DeleteAll(true); B`), S45 (on the prefix, so M is the trigger itself: `OnDelete: B; A;
+  Commit`, root `D.DeleteAll(true)`; row 1's A, the commit, row 2's B), S47 (a batch job: root
+  `Report.Run(…)`, the dataitem's `OnAfterGetRecord` is `B; A; Commit`). B's route below M is
+  checked too, as the safe side.
+- *Zero times, on B's route: no sure-B cut.* A sure-B cut (§4.2) stands only on a plain edge that
+  must run its one target whenever its site runs: a direct call, or a variable-typed call,
+  implicit trigger or object run not marked `Maybe`, with no other edge at the same site. Never a
+  table event (a bulk operation may match no row; a subscriber may be bound by hand), an
+  interface call (one implementer of several runs, open or closed world) or an event edge.
+  Otherwise the path is not cut there, the site's cone enters the region, and the answer is `yes`
+  or blocked. Shapes: S46 (a loop of `A; SetRange; DeleteAll(true); Commit` whose first pass
+  matches no row: `yes`) and S48 (a loop of `A; Insert(I = 2); Commit`, B in `OnInsert`: the
+  non-literal RunTrigger runs B only on pass 2: `yes`).
+- *Zero times, on A's route.* Needs nothing: on a pass where A's edge does not fire, A does not
+  run, and the question is about the runs after A.
+
+Neither rule changes a `yes`: the blockers only add reasons, and fewer cuts only widen the
+regions.
 
 **Other edges at a leave site** (revision 3.3, Fable review r3): a record operation or object
 run that a route leaves by can have several edges at the same site: an implicit trigger, a table
@@ -386,7 +409,8 @@ other alternatives (one of them runs instead of the route's) do not count.
   and the next run of B. A path from A is cut at a run of B **only when that B runs on every
   path that continues from that point**: B is not inside a branch, not after a `break`,
   `continue`, `exit` or error that may leave first, not inside a loop that may run zero times,
-  and, when B is reached through a call, the call runs on every continuing path and B runs on
+  and, when B is reached through a call, the call runs on every continuing path, its edge fires
+  whenever it runs (§4.1, "every route edge fires once per pass"), and B runs on
   every path through the callee. Otherwise the path is not cut there and the search goes on.
   - S5 (`for: Send; L.Insert; Commit`): B surely runs after each A in the same iteration, so
     the path is cut there: `no`.
