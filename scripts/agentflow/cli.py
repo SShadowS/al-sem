@@ -1904,16 +1904,16 @@ def cmd_cleanup(args, ctx, gh, git):
             raise Fail({"error": "a verification worktree is detached: "
                                  "--branch, --merge-sha and --spike do not apply",
                         "worktree": args.worktree}, 2)
-        # THE LOCATION CONJUNCT. `worktrees._guard` proves the NAME, and that
-        # is the only thing standing between this recursive delete and an
-        # arbitrary path -- but this is the one `destroy` call whose path comes
-        # from ARGV. Every other caller passes a path `worktrees.verify_path`
-        # built, so location is guaranteed there by construction and here by
-        # nothing. `recovery._refuse_unowned_path` states the rule this
-        # restores: TWO conjuncts, because either alone is close to nothing --
-        # `U:/Git` holds ~230 sibling directories, nearly all of them git
-        # repositories, so "is a sibling of the checkout" is not ownership, and
-        # a matching name anywhere else on disk is not ownership either.
+        # THE LOCATION CONJUNCT, the first of the checks below. This is the one
+        # removal of the verification tree whose path comes from ARGV; every
+        # other caller passes the path `worktrees.verify_path` built. The path
+        # must sit in this checkout's parent, then be this ROOT's canonical
+        # tree path (compared without resolving links, not a symlink), and
+        # under `registry` the guarded step (`worktrees._take_owned_held`)
+        # also requires this repository's worktree registration and a
+        # reservation it may reclaim. `worktrees._guard` (the name prefix)
+        # alone is close to nothing: `U:/Git` holds ~230 sibling directories,
+        # nearly all of them git repositories.
         target = Path(args.worktree).resolve()
         if target.parent != ctx.paths.root.parent.resolve():
             raise Fail({"error": "refusing a verification worktree outside this "

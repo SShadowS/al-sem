@@ -113,17 +113,21 @@ def _guard(path: Path) -> None:
         raise RuntimeError(f"{path} is not an agentflow verification worktree")
 
 
-VERIFY_TREE = f"{VERIFY_PREFIX}tree"
-
-
 def verify_path(root: Path) -> Path:
     """Where the verification worktree lives: a SIBLING of the repo root, which
     is where the flow's issue worktrees already live (`cli.cmd_claim` uses
     `ctx.paths.root.parent`). The distinct prefix keeps it out of
     `recovery.recover_stale`'s glob, which matches `al-sem-issue-{issue}-a*`.
 
-    ONE FIXED PATH, for the merge check and the revert check alike, never one
-    per merge SHA. Test binaries bake `env!("CARGO_MANIFEST_DIR")` (175 uses
+    ONE PER CHECKOUT ROOT, named after the root (`<parent>/al-sem-verify-<root
+    name>`, TLS-122 sol r17): the merge lane, the `registry` lock and the
+    tree's reservation all live in that root's `.agent/`, so the tree must be
+    the root's own too. Several checkouts of one repository side by side
+    (server1's lane worktrees all sit in one parent) each get their own tree,
+    and one root's cleanup never reaches another's.
+
+    ONE FIXED PATH per root, for the merge check and the revert check alike,
+    never one per merge SHA. Test binaries bake `env!("CARGO_MANIFEST_DIR")` (175 uses
     in `tests/` and `src/`), and cargo reuses a binary whose Rust sources did
     not change, so a binary built in a tree at another path resolves its
     fixtures and goldens under THAT path. With a per-SHA path, the next
@@ -137,7 +141,7 @@ def verify_path(root: Path) -> Path:
     leftover first, so a later post-merge reclaims a tree an earlier one
     RETAINED as evidence; that only follows an operator clearing the HALT the
     retention set."""
-    return root.parent / VERIFY_TREE
+    return root.parent / f"{VERIFY_PREFIX}{root.name}"
 
 
 class NotOurs(GitError):
@@ -164,8 +168,26 @@ def _own_start() -> str | None:
         return None
 
 
+def _boot_id() -> str | None:
+    """This boot's id: a PID and a start time mean something only within one
+    boot (Fable r2 L1)."""
+    try:
+        return Path("/proc/sys/kernel/random/boot_id").read_text(encoding="utf-8").strip() or None
+    except OSError:
+        return None
+
+
+def _pid_ns() -> str | None:
+    """This process's PID namespace: a PID means something only within it."""
+    try:
+        return os.readlink("/proc/self/ns/pid")
+    except OSError:
+        return None
+
+
 # THIS INVOCATION (one CLI process): what a reservation names (sol r13).
-_ME = {"pid": os.getpid(), "start": _own_start(), "nonce": os.urandom(8).hex()}
+_ME = {"pid": os.getpid(), "start": _own_start(), "boot": _boot_id(), "pidns": _pid_ns(),
+       "nonce": os.urandom(8).hex()}
 
 ALIVE, DEAD, UNKNOWN = "alive", "dead", "unknown"
 
@@ -174,9 +196,12 @@ def _liveness(owner) -> str:
     """Whether the invocation a reservation names still runs: ALIVE, DEAD or
     UNKNOWN (sol r14). Only DEAD is ever reclaimed, and only by a new `create`
     or an explicit cleanup.
-    - With /proc: no `/proc/<pid>` is DEAD; a start time that differs is DEAD
-      (the PID was reused); the same start time is ALIVE; a stat that cannot
-      be read is UNKNOWN, never DEAD.
+    - With /proc, first the frame (Fable r2 L1): a reservation from another
+      boot is DEAD (every process of that boot has ended); a boot id missing
+      on either side, or a PID namespace that is missing or not this one, is
+      UNKNOWN (the PID cannot be judged from here). Then: no `/proc/<pid>` is
+      DEAD; a start time that differs is DEAD (the PID was reused); the same
+      start time is ALIVE; a stat that cannot be read is UNKNOWN, never DEAD.
     - Without /proc only the PID can be asked about: gone is DEAD, present is
       UNKNOWN (it may be a reused PID).
     - A reservation that is not a well-formed record: UNKNOWN."""
@@ -184,6 +209,14 @@ def _liveness(owner) -> str:
     if not isinstance(pid, int) or isinstance(pid, bool) or pid <= 0:
         return UNKNOWN
     if Path("/proc").is_dir():
+        boot, now_boot = owner.get("boot"), _boot_id()
+        if not (isinstance(boot, str) and boot and now_boot):
+            return UNKNOWN
+        if boot != now_boot:
+            return DEAD
+        pidns = owner.get("pidns")
+        if not (isinstance(pidns, str) and pidns and pidns == _pid_ns()):
+            return UNKNOWN
         recorded = owner.get("start")
         if not (isinstance(recorded, str) and recorded.isascii() and recorded.isdigit()):
             # No valid start time (clock ticks: digits only) to tell a live
@@ -240,7 +273,13 @@ def _take_owned_held(ctx, git: Git, path: Path) -> Path | None:
     reservation cleared, and the tombstone returned (None if nothing was
     there)."""
     res_path = _reservation_path(ctx, path)
-    owner = read_json(res_path)
+    try:
+        owner = read_json(res_path)
+    except (OSError, ValueError) as e:
+        # A damaged reservation (a hand edit, a torn file) is a clear refusal,
+        # never a traceback (Fable r2 L4): its owner cannot be told.
+        raise NotOurs(f"{path} has a reservation that cannot be read ({e}); refusing to touch "
+                      f"it. If no invocation is using the tree, delete {res_path}") from e
     mine = isinstance(owner, dict) and all(owner.get(k) == _ME[k] for k in ("pid", "start", "nonce"))
     if owner is not None and not mine:          # this invocation's own reservation is its to take
         state = _liveness(owner)
@@ -323,15 +362,19 @@ def create(ctx, git: Git, path: Path, commit: str) -> dict:
     Teardown belongs in the function that created the thing, so BOTH call
     sites get it rather than only the one that remembered."""
     _guard(path)
-    with mutex(ctx, "registry"):
-        try:
+    # Every failure before the token exists is a GitError (Fable r2 M1): the
+    # callers (post-merge, the revert worktree) catch only GitError, and a
+    # busy `registry` or a failed reservation write must not skip their
+    # records. `NotOurs` is a GitError already.
+    try:
+        with mutex(ctx, "registry"):
             tomb = _take_owned_held(ctx, git, path)
-        except OSError as e:
-            raise GitError(f"could not move the old verification tree aside: {e}") from e
-        # Reserved for THIS ATTEMPT before the add (sol r13, r14): another
-        # invocation now finds a reservation it cannot reclaim and refuses.
-        token = {**_ME, "attempt": os.urandom(8).hex(), "path": str(path)}
-        write_json(ctx, _reservation_path(ctx, path), token)
+            # Reserved for THIS ATTEMPT before the add (sol r13, r14): another
+            # invocation now finds a reservation it cannot reclaim and refuses.
+            token = {**_ME, "attempt": os.urandom(8).hex(), "path": str(path)}
+            write_json(ctx, _reservation_path(ctx, path), token)
+    except (MutexTimeout, OSError) as e:
+        raise GitError(f"could not prepare the verification tree at {path}: {e}") from e
     # Everything after the token is published runs inside its rollback (sol r15).
     try:
         if tomb is not None:

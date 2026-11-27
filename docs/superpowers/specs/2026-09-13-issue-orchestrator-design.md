@@ -312,7 +312,8 @@ Labels are a mirror for humans, not a lock. The lock is local:
       hand edit of `.agent/` is. agentflow keeps it itself (sol r12): every
       lifecycle operation on the tree (post-merge's `create` and teardown,
       the revert worktree, cleanup) checks the occupant and moves it aside in
-      one guarded step under `registry` (`worktrees._take_owned_held`).
+      one guarded step under `registry` (`worktrees._check_and_detach_held`,
+      reached by `create` and cleanup through `_take_owned_held`).
       `create` refuses an unregistered occupant (`NotOurs`) instead of
       deleting it. The tree belongs to the create attempt that made it (sol
       r13, r14): before `git worktree add`, `create` writes a reservation
@@ -587,9 +588,14 @@ human for what the flow can finish itself.
 ### Isolation: the gates never run in the shared checkout
 
 The shared checkout stays on `master` for the whole command. The merge SHA is
-materialised in a disposable detached worktree (`../al-sem-verify-tree`, one
-FIXED path, a sibling of the repo root, deliberately outside the glob that finds
-issue worktrees), and that directory is torn down in a `finally`. Until 2026-10-21
+materialised in a disposable detached worktree (`../al-sem-verify-<root name>`,
+one FIXED path per checkout root, a sibling of the repo root, deliberately
+outside the glob that finds issue worktrees), and that directory is torn down in
+a `finally`. It is named after the root (TLS-122 sol r17) because the merge
+lane, the `registry` lock and the tree's reservation all live in that root's
+`.agent/`: checkouts of one repository side by side (server1's lane worktrees
+share one parent) each get their own tree, and one root's cleanup never reaches
+another's. Until 2026-10-21
 the path carried the merge SHA (`../al-sem-verify-merge-<sha12>`); see the build
 cache bullet below for why it no longer does.
 

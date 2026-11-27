@@ -130,7 +130,9 @@ def test_the_invocation_that_lost_the_race_leaves_the_winners_tree(repo_pair, mo
 
 def test_remove_acts_only_on_its_own_tokens_reservation(repo_pair):
     """`remove` takes the tree only while the reservation still equals the
-    token its `create` returned: a stale or foreign token touches nothing."""
+    token its `create` returned: a stale or foreign token touches nothing.
+    Red proof (Fable r2): the `read_json(res_path) != token` comparison
+    removed from `remove` failed here (the foreign token removed the tree)."""
     _, clone = repo_pair
     g = Git(clone)
     ctx = Ctx(Paths(clone))
@@ -150,7 +152,8 @@ def test_a_new_create_reclaims_a_dead_invocations_reservation(repo_pair):
     ctx = Ctx(Paths(clone))
     p = worktrees.verify_path(clone)
     worktrees.create(ctx, g, p, g.rev("master"))
-    dead = {"pid": 2 ** 22 + 12345, "start": "1", "nonce": "f" * 16, "attempt": "x", "path": str(p)}
+    dead = {**worktrees._ME, "pid": 2 ** 22 + 12345, "start": "1", "nonce": "f" * 16,
+            "attempt": "x", "path": str(p)}
     _reservation(ctx, p).write_text(json.dumps(dead), encoding="utf-8")
     token = worktrees.create(ctx, g, p, g.rev("master"))
     assert json.loads(_reservation(ctx, p).read_text(encoding="utf-8")) == token
@@ -182,7 +185,9 @@ def test_liveness_is_three_valued(monkeypatch):
 def test_an_unknown_reservation_is_never_reclaimed(repo_pair, monkeypatch):
     """A reservation whose owner's liveness is UNKNOWN is never reclaimed
     automatically: a new `create` refuses, naming the reservation file so
-    explicit cleanup can report it (sol r14)."""
+    explicit cleanup can report it (sol r14).
+    Red proof (Fable r2): the `state != DEAD` refusal in `_take_owned_held`
+    removed failed here (the UNKNOWN owner's tree was reclaimed)."""
     _, clone = repo_pair
     g = Git(clone)
     ctx = Ctx(Paths(clone))
@@ -332,3 +337,87 @@ def test_create_goes_on_when_its_prune_finds_the_git_mutex_busy(repo_pair, monke
     assert Git(p).rev("HEAD") == g.rev("master")
     assert json.loads((ctx.paths.agent / "verify-reservations" / f"{p.name}.json")
                       .read_text(encoding="utf-8")) == token
+
+
+def test_liveness_is_judged_within_one_boot_and_one_pid_namespace():
+    """A PID and a start time mean something only within one boot and one PID
+    namespace (Fable r2 L1): a reservation from another boot is DEAD; one with
+    no boot id, or from another PID namespace, or without one, is UNKNOWN.
+    Red proofs (Fable r2 L1): the boot check removed failed the other-boot
+    case (ALIVE: same pid and start); the pid-namespace check removed failed
+    the other-namespace case (ALIVE)."""
+    if not Path("/proc").is_dir() or worktrees._ME["boot"] is None or worktrees._ME["pidns"] is None:
+        pytest.skip("the /proc branch with a boot id and a pid namespace")
+    me = worktrees._ME
+    assert worktrees._liveness(me) == worktrees.ALIVE
+    assert worktrees._liveness({**me, "boot": "another-boot"}) == worktrees.DEAD
+    assert worktrees._liveness({**me, "boot": None}) == worktrees.UNKNOWN
+    assert worktrees._liveness({**me, "pidns": "pid:[1]"}) == worktrees.UNKNOWN
+    assert worktrees._liveness({**me, "pidns": None}) == worktrees.UNKNOWN
+
+
+@pytest.mark.parametrize("failure", ["busy registry", "reservation write"])
+def test_create_raises_only_gitError_before_its_token_exists(repo_pair, monkeypatch, failure):
+    """Every failure of `create` before its token exists is a GitError (Fable
+    r2 M1): its callers catch only GitError, and `post_merge_failure` must not
+    lose its incident record to a busy `registry` or a failed reservation
+    write.
+    Red proof (Fable r2 M1): the `except (MutexTimeout, OSError)` wrapper
+    removed from `create` failed both cases (MutexTimeout / OSError escaped)."""
+    from contextlib import contextmanager
+    from agentflow.state import MutexTimeout
+    _, clone = repo_pair
+    g = Git(clone)
+    ctx = Ctx(Paths(clone))
+    p = worktrees.verify_path(clone)
+    if failure == "busy registry":
+        @contextmanager
+        def busy(c, name, **kw):
+            raise MutexTimeout("mutex 'registry' still held")
+            yield
+        monkeypatch.setattr(worktrees, "mutex", busy)
+    else:
+        def no_space(*a, **kw):
+            raise OSError(28, "No space left on device")
+        monkeypatch.setattr(worktrees, "write_json", no_space)
+    with pytest.raises(GitError) as e:
+        worktrees.create(ctx, g, p, g.rev("master"))
+    assert not isinstance(e.value, worktrees.NotOurs)
+    assert not p.exists()
+
+
+def test_a_damaged_reservation_is_a_clear_refusal(repo_pair):
+    """A hand-damaged reservation file gives a clear `NotOurs` naming the file
+    to delete, never a traceback (Fable r2 L4), and the tree stays.
+    Red proof (Fable r2 L4): the `try` around the reservation read in
+    `_take_owned_held` removed failed here (JSONDecodeError escaped)."""
+    _, clone = repo_pair
+    g = Git(clone)
+    ctx = Ctx(Paths(clone))
+    p = worktrees.verify_path(clone)
+    worktrees.create(ctx, g, p, g.rev("master"))
+    res = ctx.paths.agent / "verify-reservations" / f"{p.name}.json"
+    res.write_text('{"pid": 12', encoding="utf-8")
+    with pytest.raises(worktrees.NotOurs, match="cannot be read") as e:
+        worktrees.create(ctx, g, p, g.rev("master"))
+    assert str(res) in str(e.value)
+    assert p.exists()
+
+
+def test_the_guarded_step_refuses_a_symlink_at_the_tree_path(repo_pair, tmp_path):
+    """`create` (and so every lifecycle operation) refuses a symlink at the
+    verification tree's path, even when it points at a registered worktree of
+    this repository, and leaves both the link and its target alone (Fable r2
+    L3: this reaches `_check_and_detach_held`'s `is_symlink` line).
+    Red proof (Fable r2 L3): that `is_symlink` check removed failed here (no
+    NotOurs: the link was moved aside)."""
+    _, clone = repo_pair
+    g = Git(clone)
+    ctx = Ctx(Paths(clone))
+    other = clone.parent / f"{worktrees.VERIFY_PREFIX}elsewhere"
+    g.worktree_add_detached(other, g.rev("master"))
+    p = worktrees.verify_path(clone)
+    p.symlink_to(other, target_is_directory=True)
+    with pytest.raises(worktrees.NotOurs, match="symlink"):
+        worktrees.create(ctx, g, p, g.rev("master"))
+    assert p.is_symlink() and other.is_dir()

@@ -2494,7 +2494,7 @@ def test_post_merge_runs_gates_in_a_worktree_with_the_main_checkout_grammar(caps
     assert cwd != clone and cwd.parent == clone.parent and cwd.name.startswith("al-sem-verify-")
     # ONE FIXED PATH, never one per merge: test binaries bake CARGO_MANIFEST_DIR, and a
     # per-SHA path left reused binaries pointing at the previous, deleted tree.
-    assert cwd.name == worktrees.VERIFY_TREE and merge_sha[:12] not in str(cwd), cwd
+    assert cwd.name == worktrees.verify_path(clone).name and merge_sha[:12] not in str(cwd), cwd
     # EVERY gate on the commit this run says it verified, never on whatever
     # `master` names by now -- which the prologue has just moved to `later`.
     assert {c["head"] for c in calls} == {merge_sha}, [c["head"] for c in calls]
@@ -3703,6 +3703,30 @@ def test_explicit_cleanup_refuses_a_non_canonical_sibling(capsys, repo_pair):
     code, out = run(capsys, clone, "cleanup", "--worktree", str(sibling), gh_run=FakeRunner(), run_id=None)
     assert code == 1 and "only the verification tree itself" in out["error"], out
     assert (sibling / "precious.txt").exists()
+
+
+def test_two_checkouts_side_by_side_never_share_a_verification_tree(capsys, repo_pair):
+    """server1's lane worktrees are checkouts of ONE repository that share a
+    parent folder, each with its own `.agent/` (its own merge lane, `registry`
+    lock and reservations). Each root therefore gets its own verification
+    tree (`<parent>/al-sem-verify-<root name>`, sol r17), and a cleanup from
+    one root never touches the other root's live tree.
+    Red proof (sol r17): `verify_path` back to one name per parent
+    (`al-sem-verify-tree`) failed here (root A's cleanup detached and deleted
+    root B's tree: it is a registered worktree of the same repository)."""
+    _, clone = repo_pair
+    g = Git(clone)
+    lane_b = clone.parent / "lane-b"
+    g.worktree_add(lane_b, "lane-b", "master")
+    assert lane_b.parent == clone.parent
+    gb = Git(lane_b)
+    tree_b = worktrees.verify_path(lane_b)
+    worktrees.create(Ctx(Paths(lane_b)), gb, tree_b, gb.rev("HEAD"))
+    (tree_b / "work-in-progress.txt").write_text("lane B's live tree\n", encoding="utf-8")
+    code, out = run(capsys, clone, "cleanup", "--worktree", str(worktrees.verify_path(clone)),
+                    gh_run=FakeRunner(), run_id=None)
+    assert code == 0, out
+    assert (tree_b / "work-in-progress.txt").exists()
 
 
 def test_explicit_cleanup_refuses_an_unregistered_directory_at_the_tree_path(capsys, repo_pair):

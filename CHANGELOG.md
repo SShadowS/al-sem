@@ -971,7 +971,15 @@ its time rules on the wall clock, which keeps counting through a suspend.
   - Verification `cleanup` re-checks the lane under it and moves the tree aside (one rename to
     `<name>.removing-<id>`). The recursive delete and `git worktree prune` run after the lock
     is released, so a slow delete starves no beat. An orphaned lane is still `recover`'s.
-  - Explicit `cleanup --worktree` of a verification tree accepts only the canonical
+  - Each checkout root has its own verification tree, `<parent>/al-sem-verify-<root name>`
+    (was one `al-sem-verify-tree` per parent folder), because its merge lane, `registry` lock
+    and reservation live in that root's `.agent/` (sol r17). server1's lane worktrees are
+    checkouts of one repository in one parent: they no longer share a tree, and one root's
+    cleanup can no longer move another root's live tree aside. The verify build cache stays
+    per root (`<root>/target-verify` by default). A tree RETAINED as evidence at the old
+    `al-sem-verify-tree` path before this change is no root's tree any more: remove it by
+    hand (`git worktree remove`, or delete it and `git worktree prune`) once looked at.
+  - Explicit `cleanup --worktree` of a verification tree accepts only the root's canonical
     verification tree path, compared without resolving symlinks, and refuses a symlink there.
     Before, any verification-prefixed sibling was accepted, and a link could steer the delete
     to one (sol r10). Before it moves the tree, it also requires evidence from outside the
@@ -983,7 +991,8 @@ its time rules on the wall clock, which keeps counting through a suspend.
     agentflow keeps that contract itself (sol r12). Every lifecycle operation on the tree
     (post-merge's create and teardown, the revert worktree in `post_merge_failure`, and
     cleanup) checks the occupant and moves it aside in one guarded step under `registry`
-    (`worktrees._take_owned_held`, through `create`, `remove` or cleanup). `create` now refuses
+    (`worktrees._check_and_detach_held`; `create` and cleanup reach it through
+    `_take_owned_held`, which first settles the reservation). `create` now refuses
     an occupant git has not registered (`NotOurs`) instead of deleting it. `git worktree list`
     counts as a read, so this check never waits on the `git` mutex while holding `registry`.
   - The tree belongs to the create attempt that made it (sol r13, r14). Under `registry`,
@@ -999,7 +1008,13 @@ its time rules on the wall clock, which keeps counting through a suspend.
       with /proc, no process or a different start time (a reused PID) is DEAD, and a stat
       that cannot be read is UNKNOWN; without /proc, a PID that still exists is UNKNOWN.
       UNKNOWN is never reclaimed: `create` refuses, and cleanup reports it with the
-      reservation file to delete by hand.
+      reservation file to delete by hand. The reservation also records the boot id and the
+      PID namespace (Fable r2): another boot is DEAD; a missing boot id, or another or
+      missing PID namespace, is UNKNOWN. A damaged reservation file is a clear refusal
+      naming the file, never a traceback.
+    - Every failure of `create` before its token exists (a busy `registry`, a failed
+      reservation write) is a `GitError`, so post-merge and the revert worktree, which catch
+      `GitError`, keep their records (Fable r2).
     - `remove` is fully best-effort: a busy `registry` or a failing `destroy` (`git worktree
       prune` timing out on the `git` mutex), and its final check, are logged to stderr, never
       raised, so a `finally` keeps its own result. It returns True only when the tree is
@@ -1023,7 +1038,7 @@ its time rules on the wall clock, which keeps counting through a suspend.
 - **Why not "stale only when the holder process is dead":** a run is a series of short
   `agentflow` calls made by a conductor session, so between calls no process holds the lease,
   and a session that stopped working must still lose its lease.
-- **Review history (Fable r1, r2 and final; sol r1-r11):** a lease file with an unknown field
+- **Review history (Fable r1, r2, final and second final; sol r1-r17):** a lease file with an unknown field
   still loads, and the clock tests run on any OS. One intermediate design kept the stamps in
   sidecar files so that older executors could read the lease. Two files could disagree after
   one failed or interrupted write, and every repair left a gap. sol r6 showed a failed FIRST
@@ -1036,7 +1051,13 @@ its time rules on the wall clock, which keeps counting through a suspend.
   name, and sol r10 found that no on-disk marker can prove ownership and that a
   check-then-delete races. Leftovers are now only reported, and explicit cleanup takes only
   the canonical tree path. sol r11 then asked for ownership evidence from outside the tree:
-  git's worktree registration for this repository.
+  git's worktree registration for this repository. sol r12-r16 made agentflow keep that
+  contract itself: one guarded lifecycle under `registry`, a per-attempt reservation and
+  token, three-valued liveness, a fully best-effort `remove`, and a strict start-time check.
+  sol r17 found the verification path keyed by the parent while its lock and reservation
+  are keyed by the root, and gave each root its own tree. Fable's second final review then
+  added the boot and PID-namespace frame, `GitError`-only failures from `create`, a clear
+  refusal for a damaged reservation, and tests that reach each guard.
 
 ### Fixed (ENG-178: table procedures named like record built-ins: four follow-ups from ENG-173)
 
