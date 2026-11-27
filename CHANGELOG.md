@@ -7,6 +7,39 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed (ENG-217: a key member that does not resolve is kept, marked, never dropped)
+
+- **The bug.** A key member naming neither a field of its table nor a system field was silently
+  left out of `ModelKey.fields`, so a two-member key with one such member read as a one-field key.
+- **The fix.** `ModelKey.fields` is `Vec<Option<String>>`, parallel to `members`: an unresolved
+  member stays, as `None`; `ModelKey::resolved()` gives the whole key or `None` (not known), for a
+  reader that needs the whole key (ENG-163's "the primary key's only field"). The type change made
+  the compiler name every reader, and each decides:
+  - the primary-key set d3, d42 and d56 exclude holds the members KNOWN to be key fields: each
+    resolved member, a system field (`SystemId`) included (it was looked up among declared fields
+    only, so a key with one read as shorter too), and not an unresolved member, so the detectors
+    keep firing on it;
+  - a tableextension's own key (on its stub) naming a base field resolves against the base its
+    alternative extends, as the merged key does; a key field of another app takes that app's stable
+    id in the snapshot;
+  - table mode's key-relevant fields skip a tableextension stub sharing the table's id; the `keys:`
+    line names an unresolved member `"name" (not resolved)`; field mode's json keeps names in
+    `fields` and adds `unresolved` (query schema 3.11.0, additive).
+- **Snapshot key shapes (release note).** A key with a member naming nothing now carries
+  `unresolved:<name>` in its shape (was: the member left out), and a tableextension's own key over a
+  base field now carries the base field's stable id (was: that member left out), so such keys'
+  `shapeFingerprint`s and `alsem diff` rows move once.
+- **CDO (pinned `bc3ccb18`).** Census first: 1 of 4171 keys had an unresolved member (a
+  tableextension stub's own key over a base field, not in a primary app). Nothing moved: findings
+  2306 and 32405, no finding fingerprint added or removed, unknown 0, census flat, and all 104
+  primary-snapshot key shapes identical (`/work/.al-sem/engine-notes/eng217/ba-792414ac/`).
+- **Tests and red proofs.** `r4::r4_table_name_scope` (a key over an undeclared field through the
+  model and the CLI: keys line, field mode json, snapshot shape against the shorter key; a
+  colliding stub's key; a stub key resolved against its base), `detectors::primary_key_tests`,
+  `snapshot_full::stable_field_id_tests`. Each guard was broken, run red and restored.
+- **Filed.** ENG-230 (the snapshot writes a colliding tableextension stub's rows under the real
+  table's stable ids).
+
 ### Fixed (ENG-218: FlowField and RecordRef tables, and a table's extensions, bind as the resolver binds them, not by name across all apps)
 
 - **The bug.** ENG-194 made record variables bind a table name as the program's resolver does, seen

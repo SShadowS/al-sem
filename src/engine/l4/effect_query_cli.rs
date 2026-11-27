@@ -116,7 +116,10 @@ use crate::program::resolve::full::LoadedDependencies;
 /// `up.directSites` adds `dependencyRoutines`, `workspaceByOp`,
 /// `dependencyByOp`, `workspaceByObject` and `keyRelevant`; field mode's
 /// `fieldSummary` adds `confirmedSites` and `candidateSites`.
-const QUERY_SCHEMA_VERSION: &str = "3.10.0";
+/// 3.11.0 (ENG-217, additive): a field-mode `declaredKeys[]` entry whose key
+/// has a member naming no field adds `unresolved` (those members' declared
+/// names); `fields` still holds every member by name.
+const QUERY_SCHEMA_VERSION: &str = "3.11.0";
 
 /// Which direction(s) a `query touches` run reports.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
