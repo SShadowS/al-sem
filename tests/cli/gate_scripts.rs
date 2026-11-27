@@ -2016,33 +2016,12 @@ fn ci_steps_all_runs_and_judges_the_agentflow_suite() {
     assert!(text.contains("FAILED at 'agentflow'"), "{text}");
 }
 
-/// TLS-141: `ci-steps task` and `task-affected` run agentflow's
-/// `test_gate_env.py` (real pytest, on a scratch copy of `scripts/`), so a
-/// script that reads a new variable conftest neither clears nor keeps fails the
-/// task gate, not only the landing's `ci-steps all` (TLS-127's two cdo-slot
-/// variables did). `cargo` and the helper scripts are stubbed; the copy as it
-/// is passes both steps, and with one added script reading `TLS141_UNLISTED_KNOB`
-/// both steps fail at `gate-env`, naming it. Skipped only on GitHub CI, whose
-/// runner has no pytest.
-///
-/// Python runs with a scratch HOME, no user site, no PYTHONPATH and no plugin
-/// autoload, so nothing from the developer's home changes the result (TLS-141
-/// reviews r1 and r2, sol). When `python3` has no pytest that way, the only
-/// other source is a venv named by `ALSEM_TEST_PYTHON` (its `python3`), whose
-/// bin folder, made absolute (`test_python_bin`), goes first on PATH; the user
-/// site is never added.
-///
-/// Mutations (2026-11-26, r1 form re-checked 2026-11-27, the second again on
-/// the r2 form; each made with Edit):
-/// - `gate-env` taken out of `task`'s step loop -> FAILED (the clean `task` run
-///   printed no `=== ci-steps: gate-env ===`); restored -> passed.
-/// - `gate-env` taken out of `task-affected`'s step loop -> FAILED (the same
-///   check, on the clean `task-affected` run); restored -> passed.
 /// TLS-141 review r3 (sol): the bin folder of the venv `ALSEM_TEST_PYTHON` names,
 /// as an absolute path. The gate runs in a scratch folder, so a relative one
 /// (`.venv/bin/python3`) would name the wrong folder there. Made absolute, never
 /// canonicalized: a venv's python3 is a symlink, and resolving it leaves the venv.
 /// Refused when that folder holds no `python3` (the name the gate runs).
+#[cfg(unix)]
 fn test_python_bin(raw: &std::ffi::OsStr) -> Result<std::path::PathBuf, String> {
     let py = std::path::absolute(raw).map_err(|e| format!("ALSEM_TEST_PYTHON={raw:?}: {e}"))?;
     let bin = py
@@ -2089,6 +2068,28 @@ fn test_python_bin_makes_a_relative_venv_absolute() {
     assert!(err.contains("no python3"), "{err}");
 }
 
+/// TLS-141: `ci-steps task` and `task-affected` run agentflow's
+/// `test_gate_env.py` (real pytest, on a scratch copy of `scripts/`), so a
+/// script that reads a new variable conftest neither clears nor keeps fails the
+/// task gate, not only the landing's `ci-steps all` (TLS-127's two cdo-slot
+/// variables did). `cargo` and the helper scripts are stubbed; the copy as it
+/// is passes both steps, and with one added script reading `TLS141_UNLISTED_KNOB`
+/// both steps fail at `gate-env`, naming it. Skipped only on GitHub CI, whose
+/// runner has no pytest.
+///
+/// Python runs with a scratch HOME, no user site, no PYTHONPATH and no plugin
+/// autoload, so nothing from the developer's home changes the result (TLS-141
+/// reviews r1 and r2, sol). When `python3` has no pytest that way, the only
+/// other source is a venv named by `ALSEM_TEST_PYTHON` (its `python3`), whose
+/// bin folder, made absolute (`test_python_bin`), goes first on PATH; the user
+/// site is never added.
+///
+/// Mutations (2026-11-26, r1 form re-checked 2026-11-27, the second again on
+/// the r2 form; each made with Edit):
+/// - `gate-env` taken out of `task`'s step loop -> FAILED (the clean `task` run
+///   printed no `=== ci-steps: gate-env ===`); restored -> passed.
+/// - `gate-env` taken out of `task-affected`'s step loop -> FAILED (the same
+///   check, on the clean `task-affected` run); restored -> passed.
 #[cfg(unix)]
 #[test]
 fn ci_steps_task_runs_the_gate_env_check() {
