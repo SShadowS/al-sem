@@ -183,6 +183,24 @@ pub fn merge_extension_fields(
             .map(|f| (al_syntax::fold_identifier(&f.name), f.id.clone()))
             .collect();
         by_name.extend(own_fields);
+        // ENG-217 (Fable r1): the extension's OWN key rows (on its stub) name
+        // base fields too (`key(K; "No.", "Ext Code")`), which the stub could
+        // not resolve; they resolve here, against the base this alternative
+        // extends, as the merged key does. Applied after the loop (`base` is
+        // borrowed below).
+        let stub_fills: Vec<(usize, usize, String)> = ext_keys
+            .iter()
+            .enumerate()
+            .flat_map(|(ki, k)| {
+                let by_name = &by_name;
+                k.fields
+                    .iter()
+                    .zip(&k.members)
+                    .enumerate()
+                    .filter(|(_, (f, _))| f.is_none())
+                    .filter_map(move |(mi, (_, m))| by_name.get(m).map(|id| (ki, mi, id.clone())))
+            })
+            .collect();
         // The members of the keys EARLIER alternatives of this same extension
         // (its own id prefix) added, taken before this alternative adds any:
         // a later alternative repeating one of them adds none, but two keys of
@@ -256,6 +274,10 @@ pub fn merge_extension_fields(
                 members: k.members.clone(),
                 declared_by: Some(object.name.clone()),
             });
+        }
+        let stub = &mut workspace.tables[ext_idx];
+        for (ki, mi, id) in stub_fills {
+            stub.keys[ki].fields[mi] = Some(id);
         }
     }
 }

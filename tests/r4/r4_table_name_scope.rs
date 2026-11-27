@@ -208,6 +208,51 @@ tableextension 50251 "Tri Ext" extends "Tri"
 }
 #endif
 
+table 50310 "Odd Key"
+{
+    fields
+    {
+        field(1; "No."; Code[20]) { }
+    }
+    keys
+    {
+        key(PK; "No.", "Missing") { }
+        key(K2; "No.") { }
+    }
+
+    procedure TouchNo()
+    begin
+        Rec.FindFirst();
+    end;
+}
+
+table 50320 "Collide Host"
+{
+    fields
+    {
+        field(1; "No."; Code[20]) { }
+        field(2; "Code Z"; Code[20]) { }
+    }
+    keys
+    {
+        key(PK; "No.") { }
+    }
+
+    procedure TouchZ()
+    begin
+        Rec.SetRange("Code Z", 'X');
+        Rec.FindFirst();
+    end;
+}
+
+tableextension 50320 "Collide Ext" extends "Ws Only"
+{
+    keys
+    {
+        key(CK; "Code Z") { }
+    }
+}
+
 tableextension 50300 "Ws Key Ext" extends "Ws Only"
 {
     fields
@@ -1331,17 +1376,33 @@ fn explain_declines_a_card_whose_alternatives_extend_different_tables() {
 }
 
 /// ENG-217: a key member that names no field of its table is KEPT, marked
-/// unresolved, never left out. "Ws Key Ext" declares `key(WsKey; "Entry
-/// No.", "Ext Code")`: on the extension's own stub, `"Entry No."` (a field of
-/// the base) does not resolve, so the stub's key is two members with the
-/// first not known, not the one-field key `"Ext Code"`; merged onto "Ws
-/// Only", both resolve.
-/// DISCRIMINATION (2026-11-27, break made with Edit, run red, restored,
+/// unresolved, never left out: "Odd Key"'s `key(PK; "No.", "Missing")` is two
+/// members with the second not known, never the one-field key `"No."`. And a
+/// tableextension's own key over a base field (CDO has one: "Ws Key Ext"'s
+/// `key(WsKey; "Entry No.", "Ext Code")`) resolves on its stub against the
+/// base the extension extends (Fable r1), as the merged key does.
+/// DISCRIMINATION (2026-11-27, each break made with Edit, run red, restored,
 /// green): `index_table_ir` leaving the member out again (`filter_map`) fails
-/// "the unresolved member is kept".
+/// "the unresolved member is kept"; the merge not resolving the stub's own key
+/// against the base fails "the stub's key resolves against its base".
 #[test]
 fn a_key_member_that_does_not_resolve_is_kept_not_dropped() {
     let ws = model();
+    let odd = ws
+        .tables
+        .iter()
+        .find(|t| !t.is_extension_stub && t.id == format!("{WS}/table/50310"))
+        .expect("Odd Key");
+    assert_eq!(
+        odd.keys[0].fields,
+        vec![Some(format!("{WS}/table/50310/1")), None],
+        "the unresolved member is kept"
+    );
+    assert_eq!(
+        odd.keys[0].resolved(),
+        None,
+        "a key with an unresolved member is not known"
+    );
     let stub = ws
         .tables
         .iter()
@@ -1354,13 +1415,11 @@ fn a_key_member_that_does_not_resolve_is_kept_not_dropped() {
         .unwrap_or_else(|| panic!("the stub's key: {:?}", stub.keys));
     assert_eq!(
         key.fields,
-        vec![None, Some(format!("{WS}/table/50300/50300"))],
-        "the unresolved member is kept"
-    );
-    assert_eq!(
-        key.resolved(),
-        None,
-        "a key with an unresolved member is not known"
+        vec![
+            Some(format!("{WS}/table/50220/1")),
+            Some(format!("{WS}/table/50300/50300"))
+        ],
+        "the stub's key resolves against its base"
     );
     let base = ws
         .tables
@@ -1379,5 +1438,91 @@ fn a_key_member_that_does_not_resolve_is_kept_not_dropped() {
             format!("{WS}/table/50220/50300").as_str()
         ]),
         "merged onto its base, both members resolve"
+    );
+}
+
+/// Run `alsem <args>` on the fixture (the fixture folder is the argument
+/// after the subcommand words, as each command takes it); stdout as text.
+fn alsem_out(words: &[&str], rest: &[&str]) -> String {
+    let dir = fixture();
+    let ws = dir.path().to_string_lossy().into_owned();
+    let mut args: Vec<&str> = words.to_vec();
+    args.push(&ws);
+    args.extend_from_slice(rest);
+    let out = std::process::Command::new(env!("CARGO_BIN_EXE_alsem"))
+        .args(&args)
+        .env("RUST_LOG", "off")
+        .output()
+        .expect("spawn alsem");
+    String::from_utf8_lossy(&out.stdout).into_owned()
+}
+
+/// ENG-217: the readers that render or fingerprint a key keep an unresolved
+/// member ("Odd Key"'s `key(PK; "No.", "Missing")`): table mode's `keys:`
+/// line names it marked, field mode's key list names it marked, and the
+/// snapshot's key shape carries it as `unresolved:missing`, so the key is
+/// never the shorter key's shape (its `#K0` differs from its `#K1`, `"No."`
+/// alone). And a tableextension stub sharing a table's id is no key of it
+/// (Fable r1 S1).
+/// DISCRIMINATION (2026-11-27, each break made with Edit, run red, restored,
+/// green): leaving the member out of `table_keys_line` fails "keys line";
+/// field mode's `key_names` without the mark fails "field mode"; the
+/// snapshot shape without the member fails "snapshot shape"; table mode's key
+/// fields taking the colliding stub's keys fails "a colliding stub's key".
+/// (The snapshot holds one row per table, the stub too, so a stub that shares
+/// a table's id writes the same stable ids: filed as ENG-230.)
+#[test]
+fn key_readers_name_an_unresolved_member() {
+    let table = alsem_out(&["query", "touches"], &["--table", "Odd Key"]);
+    assert!(
+        table.contains(r#"primary key "No.", "missing" (not resolved)"#),
+        "keys line: {table}"
+    );
+    // Fable r1 S1: "Collide Ext" (tableextension 50320) has a stub with
+    // "Collide Host"'s id; its key over "Code Z" is no key of "Collide Host",
+    // so "Collide Host"'s `SetRange("Code Z", ...)` is no key-relevant site.
+    let host = alsem_out(&["query", "touches"], &["--table", "Collide Host"]);
+    assert!(
+        host.contains("SetRange/SetFilter on key fields 0"),
+        "a colliding stub's key is no key of the table: {host}"
+    );
+    let field = alsem_out(
+        &["query", "touches"],
+        &["--table", "Odd Key", "--field", "No.", "--format", "json"],
+    );
+    assert!(
+        field.contains("missing (not resolved)"),
+        "field mode: {field}"
+    );
+    // The snapshot's key shape is hashed: "Odd Key"'s `#K0` ("No.", and the
+    // unresolved "Missing") must not have the shape of its `#K1` ("No." alone),
+    // which it would if the member were left out.
+    let snapshot = alsem_out(&["fingerprint"], &["--format", "json"]);
+    let v: serde_json::Value = serde_json::from_str(&snapshot).expect("fingerprint json");
+    let shape_of = |suffix: &str| -> Option<String> {
+        let want = format!("{WS}:Table:50310{suffix}");
+        let mut stack = vec![&v];
+        while let Some(x) = stack.pop() {
+            match x {
+                serde_json::Value::Object(m) => {
+                    if m.get("stableId").and_then(|s| s.as_str()) == Some(want.as_str()) {
+                        return m
+                            .get("shapeFingerprint")
+                            .and_then(|s| s.as_str())
+                            .map(str::to_owned);
+                    }
+                    stack.extend(m.values());
+                }
+                serde_json::Value::Array(a) => stack.extend(a.iter()),
+                _ => {}
+            }
+        }
+        None
+    };
+    let (k0, k1) = (shape_of("#K0"), shape_of("#K1"));
+    assert!(k0.is_some() && k1.is_some(), "precondition: both key rows");
+    assert_ne!(
+        k0, k1,
+        "snapshot shape: the unresolved member is part of the key"
     );
 }

@@ -2659,7 +2659,10 @@ fn render_query_touches_body(
                 .workspace
                 .tables
                 .iter()
-                .filter(|t| t.id == table.id)
+                // The real table's keys (its extensions' are merged onto it); a
+                // tableextension stub sharing the id is another object (G-5,
+                // Fable r1 on ENG-217).
+                .filter(|t| t.id == table.id && !t.is_extension_stub)
                 .flat_map(|t| {
                     t.keys.iter().flat_map(move |k| {
                         // ENG-217: a member that did not resolve counts by
@@ -6887,7 +6890,10 @@ fn render_field_touches(
         k.fields
             .iter()
             .zip(&k.members)
-            .map(|(f, m)| f.as_deref().map_or_else(|| m.clone(), field_name_of))
+            .map(|(f, m)| {
+                f.as_deref()
+                    .map_or_else(|| format!("{m} (not resolved)"), field_name_of)
+            })
             .collect()
     };
     let keys_json: Vec<Value> = answer
