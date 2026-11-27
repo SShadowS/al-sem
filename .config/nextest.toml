@@ -38,6 +38,11 @@ path = "junit.xml"
 filter = 'binary(cli) & test(=cli_fingerprint_routine_cross_app::no_dependency_parity_fingerprint_routine)'
 priority = 70
 
+# ⟨TLS-150⟩ Its derived bounds need a 60 s wait and a 20 s spent share: ~60 s.
+[[profile.default.overrides]]
+filter = 'binary(cli) & test(=cdo_slot::cdo_slot_gate_entry_waits_one_deadline_in_all)'
+priority = 70
+
 [[profile.default.overrides]]
 filter = '''
   (package(al-syntax) & test(=lower::tests::attribute_flow_scales_linearly))

@@ -7,6 +7,52 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed (TLS-150: the cdo_slot tests wait for events, not times)
+
+Three landings were lost in one day to `cdo_slot` tests that passed alone and failed under the
+suite's load. Each failure was a test defect: an assumption about how long a step takes.
+
+- **Case 4: a single look.** `cdo_slot_a_finished_gates_orphan_holds_no_timing_up` looked through
+  /proc once for the stub cargo's leaked `sleep 600`. The forked child keeps the stub's name
+  (`t135-cargo`) until it execs `sleep`, which can come after the gate ends. It now polls (`until`).
+- **Case 5: a 10 s cap.** `cdo_slot_two_sibling_timed_runs_never_wait_on_each_other` gave the second
+  sibling 10 s to be refused, then let the first go on. A loaded second sibling reached the timing
+  gate only after the first had ended, and rightly started then (one timing at a time held). It now
+  waits for the event: the second is refused (it ends) or runs beside the first (its command starts).
+- **Upper bounds on wall time**, sorted by what the bound means:
+  - Where it only guards against a hang (the break waits for ever), it is gone: the outcome is
+    asserted, bounded by the slot's watchdog (600 s), or by the new `HANG` (300 s) in
+    `run_bounded` and `end_within`. Sites: the stuck-lock reader and timing, the FIFO guard and
+    take, the clock that stops reading, the hung clock read, the go to a stopped keeper, the
+    retries and drains of the commit tests, and gate_scripts' two queue waits (30 s -> 120 s, as
+    that file's other hang guards).
+  - Where the bound is the property, it is derived from the feature's own limit, stated in a
+    comment: a 1 s deadline that must not sleep a whole poll (the poll 15 s -> 120 s, the bound
+    half of it; two tests); the publish wait inside `--timeout 2` (the lock wait 120 s, the bound
+    half of it); the gate's one deadline across rounds (the wait 8 s -> 60 s, at least 20 s spent
+    before the second round, the bound `wait - spent / 2`; it now runs ~60 s, so it starts early:
+    a nextest priority line).
+  - A refused timing's stand-in holder lives 600 s, not 30 s (the test ends it itself).
+  - Where the property is an order, it is checked as one: a refused perf-bounds ends before the
+    outer timing can (its `go` comes after; its entry wait now outlasts the watchdog); a child's
+    refusal arrives while the outer timing still runs.
+  - Two "no sleep past the deadline" tests used a 1 s deadline, which one loaded scan can pass
+    before any nap: the break then went unseen (the first proof run of the uncapped nap stayed
+    green). Both deadlines are now 10 s.
+- Left as they are: sleeps that show "nothing happened" (TLS-99), which a slow host can only weaken.
+- **Proofs** (2026-11-27, each break made with Edit and reverted, narrow nextest runs):
+  - case 4: the stub's leak removed -> "never: precondition: the gate left an orphan" (red, 61 s);
+    restored, green (4.6 s).
+  - case 5: the timing gate's refusal of an unrelated timing dropped -> the second sibling exits 0,
+    "timed by lane (sib2)" (red, 14 s); restored, green (4.0 s).
+  - the gate's deadline (case 6's test): `enter_wait`'s nap not capped to the time left -> "the
+    wait slept past its deadline: 128.4 s" (red); `awake_start` moved into the round loop -> "the
+    second round waited from zero: 61.3 s (spent 21.4 s of 60 s)" (red); restored, green (73 s).
+  - the drain's deadline: its nap not capped -> "slept past the deadline: 122.4 s" (red, 135 s);
+    restored, green (17.7 s).
+  - Before the proofs: the whole `cdo_slot` module and the two gate_scripts queue tests, 81 of 81
+    passed.
+
 ### Fixed (ENG-218: FlowField and RecordRef tables, and a table's extensions, bind as the resolver binds them, not by name across all apps)
 
 - **The bug.** ENG-194 made record variables bind a table name as the program's resolver does, seen

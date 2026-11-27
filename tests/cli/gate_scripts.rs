@@ -6253,7 +6253,9 @@ fn perf_bounds_does_not_wait_for_a_parked_gate() {
     let queue = dir.path().join("slot").join("queue");
     let start = std::time::Instant::now();
     while std::fs::read_dir(&queue).map_or(true, |mut d| d.next().is_none()) {
-        assert!(start.elapsed().as_secs() < 30, "the waiter never queued");
+        // A hang guard only (TLS-150: 30 s is no property; 120 s as this
+        // file's other hang guards).
+        assert!(start.elapsed().as_secs() < 120, "the waiter never queued");
         std::thread::sleep(std::time::Duration::from_millis(100));
     }
     let (code, text) = perf_bounds_step(
@@ -6431,7 +6433,9 @@ fn perf_bounds_parked_skip_hides_no_real_build() {
     // Its ticket in the queue (the forged one is gone): it is parked.
     let start = std::time::Instant::now();
     while std::fs::read_dir(&queue).map_or(true, |mut d| d.next().is_none()) {
-        assert!(start.elapsed().as_secs() < 30, "the waiter never queued");
+        // A hang guard only (TLS-150: 30 s is no property; 120 s as this
+        // file's other hang guards).
+        assert!(start.elapsed().as_secs() < 120, "the waiter never queued");
         std::thread::sleep(std::time::Duration::from_millis(100));
     }
     let (code, text) = perf_bounds_step(
