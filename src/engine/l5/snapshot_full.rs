@@ -982,11 +982,18 @@ fn derive_schema(resolved: &Model) -> CborValue {
                 .map(|(_, idx)| idx.to_string())
                 .unwrap_or_else(|| key.id.clone());
             let stable_key = format!("{stable_table}#K{key_index}");
-            // key shape: {fields: stableFieldIds.sort(), isEnabled:true}.
+            // key shape: {fields: stableFieldIds.sort(), isEnabled:true}. A
+            // member that did not resolve enters as `unresolved:<name>`
+            // (ENG-217): the key is not the shorter key's shape, and resolving
+            // it later is a visible change.
             let mut stable_fields: Vec<String> = key
                 .fields
                 .iter()
-                .map(|fid| internal_field_to_stable(fid, &tbl.app_guid))
+                .zip(&key.members)
+                .map(|(fid, member)| match fid {
+                    Some(fid) => internal_field_to_stable(fid, &tbl.app_guid),
+                    None => format!("unresolved:{member}"),
+                })
                 .collect();
             stable_fields.sort();
             let fields_json = format!(

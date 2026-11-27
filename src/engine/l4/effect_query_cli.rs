@@ -2662,9 +2662,15 @@ fn render_query_touches_body(
                 .filter(|t| t.id == table.id)
                 .flat_map(|t| {
                     t.keys.iter().flat_map(move |k| {
-                        k.fields.iter().filter_map(move |f| {
-                            t.field_name(f).map(super::field_touches::field_key)
-                        })
+                        // ENG-217: a member that did not resolve counts by
+                        // its declared name.
+                        k.fields
+                            .iter()
+                            .zip(&k.members)
+                            .filter_map(move |(f, m)| match f {
+                                Some(f) => t.field_name(f).map(super::field_touches::field_key),
+                                None => Some(super::field_touches::field_key(m)),
+                            })
                     })
                 })
                 .collect();
@@ -3258,10 +3264,16 @@ fn table_keys_line(model: &Model, table_id: &str) -> String {
         return String::new();
     };
     let key_text = |k: &crate::program::model::workspace::ModelKey| {
+        // ENG-217: a member that did not resolve is named as declared and
+        // marked, never left out (the key is not a shorter key).
         let names: Vec<String> = k
             .fields
             .iter()
-            .filter_map(|f| t.field_name(f).map(quoted))
+            .zip(&k.members)
+            .filter_map(|(f, m)| match f {
+                Some(f) => t.field_name(f).map(quoted),
+                None => Some(format!("{} (not resolved)", quoted(m))),
+            })
             .collect();
         let text = if names.is_empty() {
             "fields not resolved".to_string()
@@ -6869,12 +6881,21 @@ fn render_field_touches(
         })
         .collect();
     let field_name_of = |id: &str| table.field_name(id).unwrap_or(id).to_string();
+    // ENG-217: a key's members by name, one that did not resolve by its
+    // declared name (never left out).
+    let key_names = |k: &crate::program::model::workspace::ModelKey| -> Vec<String> {
+        k.fields
+            .iter()
+            .zip(&k.members)
+            .map(|(f, m)| f.as_deref().map_or_else(|| m.clone(), field_name_of))
+            .collect()
+    };
     let keys_json: Vec<Value> = answer
         .declared_keys
         .iter()
         .map(|&i| {
             let k = &table.keys[i];
-            let mut v = json!({"id": k.id, "fields": k.fields.iter().map(|f| field_name_of(f)).collect::<Vec<_>>()});
+            let mut v = json!({"id": k.id, "fields": key_names(k)});
             // r3 L1 (additive): the table extension that adds the key.
             if let Some(ext) = &k.declared_by {
                 v["declaredBy"] = json!(ext);
@@ -7101,7 +7122,7 @@ fn render_field_touches(
             .iter()
             .map(|&i| {
                 let k = &table.keys[i];
-                let names: Vec<String> = k.fields.iter().map(|f| field_name_of(f)).collect();
+                let names: Vec<String> = key_names(k);
                 // r3 L1: a key a table extension adds is named by it.
                 match &k.declared_by {
                     Some(ext) => format!(

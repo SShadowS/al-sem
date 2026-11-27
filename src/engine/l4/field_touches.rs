@@ -707,7 +707,7 @@ pub fn field_touches<'m>(
         .keys
         .iter()
         .enumerate()
-        .filter(|(_, k)| k.fields.iter().any(|f| f == field_id))
+        .filter(|(_, k)| k.fields.iter().any(|f| f.as_ref() == Some(field_id)))
         .map(|(i, _)| i)
         .collect();
     FieldAnswer {

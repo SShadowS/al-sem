@@ -238,11 +238,13 @@ pub struct ModelField {
 pub struct ModelKey {
     /// Internal key id: `${tableId}/key/${index}` (mirrors al-sem `encodeKeyId`).
     pub id: String,
-    /// Resolved member field internal ids (`${tableId}/${fieldNumber}`), in
-    /// declaration order; a system field by its fixed number
-    /// ([`SYSTEM_FIELDS`]). A key field not found in this object is silently
-    /// skipped (mirrors al-sem's `fieldsByName` resolution).
-    pub fields: Vec<String>,
+    /// Each member's field internal id (`${tableId}/${fieldNumber}`), parallel
+    /// to [`Self::members`] (same length, same order); a system field by its
+    /// fixed number ([`SYSTEM_FIELDS`]). `None` for a member that names no field
+    /// the table (or its own alternative) declares: the member is KEPT, never
+    /// left out, so a key with one cannot be read as a shorter key (ENG-217).
+    /// Read the whole key through [`Self::resolved`].
+    pub fields: Vec<Option<String>>,
     /// The key's member names as declared (unquoted, lowercased by the
     /// lowerer), so a table extension's key can be resolved again against
     /// the table it extends ([`super::extension_fields::merge_extension_fields`]).
@@ -301,6 +303,17 @@ pub const SYSTEM_FIELDS: [(&str, &str, i64); 5] = [
     ("systemmodifiedat", "SystemModifiedAt", 2_000_000_003),
     ("systemmodifiedby", "SystemModifiedBy", 2_000_000_004),
 ];
+
+impl ModelKey {
+    /// ENG-217: every member's field id, in declaration order, or `None` when
+    /// a member did not resolve: the key is then not known, never a shorter
+    /// key (a reader of "the primary key's only field" must not take a
+    /// two-member key with one unresolved member for a one-field key).
+    #[must_use]
+    pub fn resolved(&self) -> Option<Vec<&str>> {
+        self.fields.iter().map(Option::as_deref).collect()
+    }
+}
 
 impl ModelTable {
     /// The name of the table's field `id` (`${tableId}/${fieldNumber}`): a
@@ -1207,10 +1220,11 @@ fn index_table_ir(
             id: format!("{table_id}/key/{index}"),
             // `members` are already unquoted + lowercased by the lowerer. A
             // system field (`SystemModifiedAt`) is no declared field; it has
-            // its fixed number (round-3 n03: Customer's Key17 was dropped).
+            // its fixed number (round-3 n03: Customer's Key17 was dropped). A
+            // member that names neither stays, as `None` (ENG-217).
             fields: members
                 .iter()
-                .filter_map(|name| {
+                .map(|name| {
                     fields_by_name.get(name).cloned().or_else(|| {
                         SYSTEM_FIELDS
                             .iter()

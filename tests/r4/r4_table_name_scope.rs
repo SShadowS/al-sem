@@ -208,6 +208,18 @@ tableextension 50251 "Tri Ext" extends "Tri"
 }
 #endif
 
+tableextension 50300 "Ws Key Ext" extends "Ws Only"
+{
+    fields
+    {
+        field(50300; "Ext Code"; Integer) { }
+    }
+    keys
+    {
+        key(WsKey; "Entry No.", "Ext Code") { }
+    }
+}
+
 tableextension 50260 "Ws NS Ext" extends "No. Series"
 {
     fields
@@ -882,7 +894,10 @@ fn a_table_name_binds_as_the_resolver_binds_it_in_the_model() {
             let numbers: Vec<&str> = k
                 .fields
                 .iter()
-                .map(|f| f.rsplit('/').next().unwrap_or(""))
+                .map(|f| {
+                    f.as_deref()
+                        .map_or("unresolved", |f| f.rsplit('/').next().unwrap_or(""))
+                })
                 .collect();
             (k.members.join(","), numbers.join(","))
         })
@@ -935,7 +950,11 @@ fn a_table_name_binds_as_the_resolver_binds_it_in_the_model() {
         .map(|k| {
             k.fields
                 .iter()
-                .map(|f| f.rsplit('/').next().unwrap_or("").to_owned())
+                .map(|f| {
+                    f.as_deref()
+                        .map_or("unresolved", |f| f.rsplit('/').next().unwrap_or(""))
+                        .to_owned()
+                })
                 .collect::<Vec<_>>()
                 .join(",")
         })
@@ -1308,5 +1327,57 @@ fn explain_declines_a_card_whose_alternatives_extend_different_tables() {
         v["cards"][0]["runBy"]["kind"].as_str(),
         Some("not-listed"),
         "alternatives with different bases name no table: {v:#}"
+    );
+}
+
+/// ENG-217: a key member that names no field of its table is KEPT, marked
+/// unresolved, never left out. "Ws Key Ext" declares `key(WsKey; "Entry
+/// No.", "Ext Code")`: on the extension's own stub, `"Entry No."` (a field of
+/// the base) does not resolve, so the stub's key is two members with the
+/// first not known, not the one-field key `"Ext Code"`; merged onto "Ws
+/// Only", both resolve.
+/// DISCRIMINATION (2026-11-27, break made with Edit, run red, restored,
+/// green): `index_table_ir` leaving the member out again (`filter_map`) fails
+/// "the unresolved member is kept".
+#[test]
+fn a_key_member_that_does_not_resolve_is_kept_not_dropped() {
+    let ws = model();
+    let stub = ws
+        .tables
+        .iter()
+        .find(|t| t.is_extension_stub && t.id == format!("{WS}/table/50300"))
+        .expect("Ws Key Ext's stub");
+    let key = stub
+        .keys
+        .iter()
+        .find(|k| k.members == ["entry no.", "ext code"])
+        .unwrap_or_else(|| panic!("the stub's key: {:?}", stub.keys));
+    assert_eq!(
+        key.fields,
+        vec![None, Some(format!("{WS}/table/50300/50300"))],
+        "the unresolved member is kept"
+    );
+    assert_eq!(
+        key.resolved(),
+        None,
+        "a key with an unresolved member is not known"
+    );
+    let base = ws
+        .tables
+        .iter()
+        .rfind(|t| !t.is_extension_stub && t.id == format!("{WS}/table/50220"))
+        .expect("Ws Only");
+    let merged = base
+        .keys
+        .iter()
+        .find(|k| k.declared_by.as_deref() == Some("Ws Key Ext"))
+        .expect("the merged key");
+    assert_eq!(
+        merged.resolved(),
+        Some(vec![
+            format!("{WS}/table/50220/1").as_str(),
+            format!("{WS}/table/50220/50300").as_str()
+        ]),
+        "merged onto its base, both members resolve"
     );
 }

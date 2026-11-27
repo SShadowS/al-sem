@@ -505,12 +505,17 @@ pub(crate) fn primary_key_field_names_lc(table: &ModelTable) -> HashSet<String> 
         .keys
         .first()
         .map(|k| {
+            // ENG-217: a member that did not resolve is still a member of
+            // the primary key: its declared name stands for it, so the key is
+            // never read as a shorter one.
             k.fields
                 .iter()
-                .filter_map(|fid| {
-                    field_name_by_id
+                .zip(&k.members)
+                .filter_map(|(fid, member)| match fid {
+                    Some(fid) => field_name_by_id
                         .get(fid.as_str())
-                        .map(|n| n.fold_identifier())
+                        .map(|n| n.fold_identifier()),
+                    None => Some(member.fold_identifier()),
                 })
                 .collect()
         })
@@ -2745,5 +2750,47 @@ mod walk_paths_tests {
         };
         assert!(ok(block(vec![guard(true), call("p")])));
         assert!(!ok(block(vec![guard(false), call("p")])));
+    }
+}
+
+#[cfg(test)]
+mod primary_key_tests {
+    use super::*;
+    use crate::program::model::workspace::ModelKey;
+
+    /// ENG-217: a primary-key member that did not resolve still names the
+    /// key (d3, d42 and d56 read the set): `key(PK; "No.", "Ext Code")` with
+    /// "Ext Code" not resolved is {"no.", "ext code"}, never the one-field
+    /// {"no."}. Hand-stated key rows.
+    /// DISCRIMINATION (2026-11-27, break then restored, green): skipping an
+    /// unresolved member fails "the unresolved member stays a key member".
+    #[test]
+    fn an_unresolved_primary_key_member_stays_in_the_set() {
+        let mut t = crate::program::model::symbol_table::tests::tab("a", 1, "T", false);
+        t.fields.push(crate::program::model::workspace::ModelField {
+            id: "a/table/1/1".into(),
+            physical_table_id: "a/table/1".into(),
+            declaring_object_id: "a/Table/1".into(),
+            declaring_app_id: "a".into(),
+            field_number: 1,
+            name: "No.".into(),
+            field_class: "Normal".into(),
+            data_type: "Code".into(),
+            is_blob_like: false,
+            captions: Default::default(),
+            calc_formula: Vec::new(),
+        });
+        t.keys.push(ModelKey {
+            id: "a/table/1/key/0".into(),
+            fields: vec![Some("a/table/1/1".into()), None],
+            members: vec!["no.".into(), "ext code".into()],
+            declared_by: None,
+        });
+        let pk = primary_key_field_names_lc(&t);
+        assert!(pk.contains("no."), "{pk:?}");
+        assert!(
+            pk.contains("ext code"),
+            "the unresolved member stays a key member: {pk:?}"
+        );
     }
 }
