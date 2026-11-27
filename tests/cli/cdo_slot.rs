@@ -4616,10 +4616,13 @@ fn cdo_slot_gate_entry_deadline_holds_over_repeated_handovers() {
             ],
             &[],
         );
+        // Its TIMING line: the hold's line names the reason too, and it is
+        // there before the timing is published.
         until("the timing has begun", &|| {
             s.run("probe", &["status"], &[])
                 .1
-                .contains(&format!("(t{i})"))
+                .lines()
+                .any(|l| l.starts_with("timed by") && l.contains(&format!("(t{i})")))
         });
         r
     };
@@ -4636,11 +4639,17 @@ fn cdo_slot_gate_entry_deadline_holds_over_repeated_handovers() {
                 ("CDO_SLOT_TEST_PAUSE_RETRY_S", "60"),
             ],
         )
-        .stdout(std::process::Stdio::null())
-        .stderr(std::process::Stdio::null())
+        .stdout(log_file(&t.join("gate.log")))
+        .stderr(
+            std::fs::OpenOptions::new()
+                .append(true)
+                .open(t.join("gate.log"))
+                .unwrap(),
+        )
         .spawn()
         .unwrap(),
     );
+    let gate_log = || std::fs::read_to_string(t.join("gate.log")).unwrap_or_default();
     // The first `enter`'s decision: timing 0 runs.
     s.wait_paused();
     s.resume();
@@ -4690,7 +4699,7 @@ fn cdo_slot_gate_entry_deadline_holds_over_repeated_handovers() {
         s.resume();
     }
     assert!(ended, "the gate never refused over 12 handovers");
-    assert_eq!(g.wait().unwrap().code(), Some(1));
+    assert_eq!(g.wait().unwrap().code(), Some(1), "{}", gate_log());
     assert_eq!(cargo_log(), "", "it built");
     for (i, _) in timings.iter().enumerate() {
         let _ = std::fs::write(t.join(format!("end{i}")), "");
