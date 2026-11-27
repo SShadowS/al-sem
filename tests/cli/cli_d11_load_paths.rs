@@ -425,6 +425,16 @@ codeunit 50501 "E Mgt"
         Ok := B ? A.Get(1) : A.Modify();
     end;
 
+    // Silent: each alternative starts from the state before the ternary, where Get loaded A.
+    procedure TernaryKeepsEntryLoad(B: Boolean)
+    var
+        A: Record "E Entry";
+        Ok: Boolean;
+    begin
+        A.Get(1);
+        Ok := B ? A.Modify() : false;
+    end;
+
     // Silent: after the ternary, the Get's alternative may have run.
     procedure TernaryLoadThenModify(B: Boolean)
     var
@@ -492,11 +502,12 @@ fn reported(dir: &Path, detector: &str) -> BTreeSet<String> {
 /// r2): any method called on the record loading it fails `PlatformMethodKeepsKill`; a terminating
 /// `Error` call site left unseen fails `ErrorArgKeepsKill`; unreachable code not marked seen fails
 /// `DeadLoadKeepsKill`. Each restored, passes. `ClearBuilds` guards the design (a `Clear` that unloaded, as the first draft did,
-/// reported it), not a line. sol r1 (2026-11-25; red proofs recorded when run): the tested
-/// operation's load kept on both branches fails `TestedGetExit`; `ir_walk::cond_call` setting no
-/// `CondOp` fails `TestedGetExit` and `TestedFindExit`; the ternary run walked in sequence fails
-/// `TernaryExclusive`; each side walked from an empty state instead of the run's entry fails
-/// `TernaryLoadThenModify`.
+/// reported it), not a line. sol r1 (red proofs run 2026-11-27, each restored and green): the
+/// tested operation's load kept on both branches fails `TestedGetExit` and `TestedFindExit`;
+/// `ir_walk::cond_call` setting no `CondOp` fails the same two; the ternary run walked in sequence
+/// fails `TernaryExclusive`; each side walked from an empty state instead of the run's entry fails
+/// `TernaryKeepsEntryLoad` (`TernaryLoadThenModify` alone stayed green under that break: its load
+/// is inside the ternary).
 #[test]
 fn a_load_must_reach_the_operation_on_some_path() {
     let t = tempfile::tempdir().unwrap();
