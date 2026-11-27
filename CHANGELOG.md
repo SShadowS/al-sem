@@ -1001,8 +1001,12 @@ its time rules on the wall clock, which keeps counting through a suspend.
       UNKNOWN is never reclaimed: `create` refuses, and cleanup reports it with the
       reservation file to delete by hand.
     - `remove` is fully best-effort: a busy `registry` or a failing `destroy` (`git worktree
-      prune` timing out on the `git` mutex) is logged to stderr, never raised, so a `finally`
-      keeps its own result.
+      prune` timing out on the `git` mutex), and its final check, are logged to stderr, never
+      raised, so a `finally` keeps its own result. It returns True only when the tree is
+      really gone, so a teardown failure is still reported.
+    - A reservation with a missing or invalid start time is UNKNOWN, never DEAD (sol r15).
+      `create` deletes an old tombstone and prunes stale registrations inside its token's
+      rollback; a prune that finds the `git` mutex busy is logged, and the create goes on.
   - A cleanup that dies between its rename and its delete can leave `<tree>.removing-<id>`.
     The next cleanup lists such siblings (plain string operations) as `tombstones_left`, with
     a hint, and deletes none of them. Nothing on disk can prove agentflow made one, and a

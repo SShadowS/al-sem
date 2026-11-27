@@ -264,3 +264,68 @@ def test_create_cleans_up_after_its_own_postcondition_failure(repo_pair, monkeyp
     # ...and the registration is gone too, or the NEXT `create` at this path
     # fails rc=128 on a stale entry.
     assert worktrees.VERIFY_PREFIX not in g.out("worktree", "list")
+
+
+@pytest.mark.parametrize("start", [None, "", 12345, ["1"]])
+def test_a_reservation_without_a_valid_start_time_is_unknown(start):
+    """A reservation whose recorded start time is missing or invalid gives
+    UNKNOWN, never DEAD: compared with a live process's real start time it
+    would read as a reused PID, and its live owner would be reclaimed (sol r15).
+    Red proof (sol r15): the recorded-start check removed from `_liveness`
+    failed here for every case (DEAD: a live owner reclaimable)."""
+    if not Path("/proc").is_dir():
+        pytest.skip("the /proc branch")
+    owner = {**worktrees._ME, "start": start}
+    assert worktrees._liveness(owner) == worktrees.UNKNOWN
+
+
+def test_remove_never_raises_from_its_final_check(repo_pair, monkeypatch):
+    """`remove`'s last step, checking that the path is free, is best-effort
+    too: an error there yields False, never an exception (sol r15).
+    Red proof (sol r15): the final check outside the `try` failed here
+    (PermissionError escaped)."""
+    _, clone = repo_pair
+    g = Git(clone)
+    ctx = Ctx(Paths(clone))
+    p = worktrees.verify_path(clone)
+    token = worktrees.create(ctx, g, p, g.rev("master"))
+    flaky = {"on": False}
+
+    class FlakyPath(type(p)):
+        def exists(self, *a, **kw):
+            if flaky["on"]:
+                raise PermissionError("cannot stat")
+            return super().exists(*a, **kw)
+
+    real_destroy = worktrees.destroy
+
+    def destroy_then_flake(git, tomb):
+        gone = real_destroy(git, tomb)
+        flaky["on"] = True
+        return gone
+
+    monkeypatch.setattr(worktrees, "destroy", destroy_then_flake)
+    assert worktrees.remove(ctx, g, FlakyPath(p), token) is False
+
+
+def test_create_goes_on_when_its_prune_finds_the_git_mutex_busy(repo_pair, monkeypatch):
+    """`create`'s prune before the add is best-effort: a `MutexTimeout` from a
+    busy `git` mutex (not a GitError) is logged and the create goes on (sol
+    r15). It runs inside the token's rollback, so any other failure there
+    still tears the attempt down.
+    Red proof (sol r15): the prune's `except` narrowed back to `GitError`
+    failed here (MutexTimeout escaped, the attempt was rolled back)."""
+    from agentflow.state import MutexTimeout
+    _, clone = repo_pair
+    g = Git(clone)
+    ctx = Ctx(Paths(clone))
+    p = worktrees.verify_path(clone)
+
+    def busy_prune():
+        raise MutexTimeout("mutex 'git' still held")
+
+    monkeypatch.setattr(g, "worktree_prune", busy_prune)
+    token = worktrees.create(ctx, g, p, g.rev("master"))
+    assert Git(p).rev("HEAD") == g.rev("master")
+    assert json.loads((ctx.paths.agent / "verify-reservations" / f"{p.name}.json")
+                      .read_text(encoding="utf-8")) == token

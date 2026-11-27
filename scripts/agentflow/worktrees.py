@@ -184,13 +184,16 @@ def _liveness(owner) -> str:
     if not isinstance(pid, int) or isinstance(pid, bool) or pid <= 0:
         return UNKNOWN
     if Path("/proc").is_dir():
+        recorded = owner.get("start")
+        if not isinstance(recorded, str) or not recorded:
+            return UNKNOWN      # no start time to tell a live owner from a reused PID (sol r15)
         try:
             start = _stat_start(pid)
         except FileNotFoundError:
             return DEAD
         except (OSError, ValueError):
             return UNKNOWN
-        return ALIVE if start == owner.get("start") else DEAD
+        return ALIVE if start == recorded else DEAD
     if os.name == "nt":
         import ctypes                                    # no /proc: ask Windows about the PID
         handle = ctypes.windll.kernel32.OpenProcess(0x1000, False, pid)
@@ -286,7 +289,12 @@ def remove(ctx, git: Git, path: Path, token: dict | None) -> bool:
             _log(f"verification tree moved aside to {tomb} but not deleted: {e}")
             gone = False
     # True only when the tree is really gone, so a teardown failure is reported.
-    return gone and not (path.exists() or path.is_symlink())
+    # The check itself is best-effort too (sol r15).
+    try:
+        return gone and not (path.exists() or path.is_symlink())
+    except Exception as e:
+        _log(f"could not check that {path} is free: {e}")
+        return False
 
 
 def create(ctx, git: Git, path: Path, commit: str) -> dict:
@@ -322,15 +330,17 @@ def create(ctx, git: Git, path: Path, commit: str) -> dict:
         # invocation now finds a reservation it cannot reclaim and refuses.
         token = {**_ME, "attempt": os.urandom(8).hex(), "path": str(path)}
         write_json(ctx, _reservation_path(ctx, path), token)
-    if tomb is not None:
-        destroy(git, tomb)
+    # Everything after the token is published runs inside its rollback (sol r15).
     try:
-        # A teardown whose prune failed left git's registration of this path
-        # behind ("missing but already registered"); clear it before the add.
-        git.worktree_prune()
-    except GitError:
-        pass
-    try:
+        if tomb is not None:
+            destroy(git, tomb)
+        try:
+            # A teardown whose prune failed left git's registration of this
+            # path behind ("missing but already registered"); clear it before
+            # the add. Best-effort: a busy `git` mutex is logged, not raised.
+            git.worktree_prune()
+        except (GitError, MutexTimeout) as e:
+            _log(f"git worktree prune before the add: {e}")
         git.worktree_add_detached(path, commit)
         landed = Git(path, run=git.run).rev("HEAD")
         want = git.rev(commit)
@@ -439,6 +449,6 @@ def destroy(git: Git, path: Path) -> bool:
             time.sleep(2)
     try:
         git.worktree_prune()
-    except GitError:
-        pass
+    except (GitError, MutexTimeout):
+        pass                       # best-effort, a busy `git` mutex included (sol r15)
     return not path.exists()
