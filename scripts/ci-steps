@@ -281,7 +281,11 @@ run_build() {
 # hold (this container's builds are stopped, so what is left is the host's), it
 # waits for the host's `some avg60` to fall to PERF_BOUNDS_LOADED_SHARE, up to
 # CDO_SPEED_CALM_WAIT_S of awake time (600 s, polled every CDO_SPEED_CALM_POLL_S,
-# 10 s; cdo-speed's own knobs and defaults), then runs anyway. Its outcome (calm,
+# 10 s; cdo-speed's own knobs and defaults; its third, CDO_SPEED_CALM_PRESSURE, is
+# not read here: the threshold is PERF_BOUNDS_LOADED_SHARE, which a test pins to
+# cdo-speed's default), then runs anyway. Right after the gate's own build, avg60
+# still counts that build for a minute or two, so "waiting" then is the wait doing
+# its job, not other projects' load (Fable r1). Its outcome (calm,
 # timed out, unreadable, no slot) is said in the log. The verdict gives this
 # cgroup's and the host's stall shares over the run, each from its own file; a
 # share above the limit, or a wait that timed out, is UNDER LOAD: an observation
@@ -418,13 +422,21 @@ perf_bounds_wait_calm() { # <wait µs> <poll µs> <wait as given> <poll as given
 # its `loaded` when above PERF_BOUNDS_LOADED_SHARE. Its interval is its own (review
 # r2, sol): each reading lies between two awake-clock readings, so the time
 # between its two readings is at least <lo> and at most <hi> µs. The share is
-# taken over <hi>: a slow reading can only lower it, never make load. When the
-# two brackets cover more than a quarter of <hi>, there is no share. Compared
-# before rounding: 15.99 % is above 15 % (review r1, sol). A malformed total, or
-# one that went backwards, is no share (review r1, sol).
-perf_bounds_share() { # <who> <stall µs before> <after> <lo µs> <hi µs>
+# taken over <hi>: a slow reading can only lower it, never make load, as long as
+# every bracket's clock reading is a fresh one. A failed clock read reuses the last
+# time (awake-clock, its first two failures in a row), which would shorten <hi>:
+# a share with a stale endpoint (<stale>, the names of those readings) is not
+# available (review r3, sol; Fable r1 made 23 % UNDER LOAD from a failed c4).
+# When the two brackets cover more than a quarter of <hi>, there is no share.
+# Compared before rounding: 15.99 % is above 15 % (review r1, sol). A malformed
+# total, or one that went backwards, is no share (review r1, sol).
+perf_bounds_share() { # <who> <stall µs before> <after> <lo µs> <hi µs> <stale>
     if [[ ! "$2" =~ ^[0-9]{1,18}$ || ! "$3" =~ ^[0-9]{1,18}$ ]]; then
         shares+=("$1 CPU stall share not readable")
+        return 0
+    fi
+    if [ -n "$6" ]; then
+        shares+=("$1 CPU stall share not available: a clock reading failed ($6)")
         return 0
     fi
     if ((10#$3 < 10#$2)); then
@@ -445,11 +457,22 @@ perf_bounds_share() { # <who> <stall µs before> <after> <lo µs> <hi µs>
 }
 
 # ⟨TLS-149⟩ One awake-clock reading into the named variable; notes in
-# `perf_clock_wall` when it was not CLOCK_MONOTONIC.
+# `perf_clock_wall` when it was not CLOCK_MONOTONIC, and adds the variable's name
+# to `perf_stale` when the read failed and reused the last time (review r3, sol).
 perf_bounds_clock() { # <variable>
     awake_read
     [[ "$awake_base" == mono ]] || perf_clock_wall=1
+    ((awake_fails == 0)) || perf_stale+="$1 "
     printf -v "$1" '%s' "$awake_us"
+}
+
+# ⟨TLS-149⟩ Which of the named clock readings were stale (perf_stale), as "c4 c5".
+perf_bounds_stale() { # <variable>...
+    local c out=""
+    for c; do
+        [[ " $perf_stale" != *" $c "* ]] || out+="$c "
+    done
+    echo "${out% }"
 }
 
 run_perf_bounds() {
@@ -523,7 +546,7 @@ run_perf_bounds() {
     local own="${CI_STEPS_CPU_PRESSURE_FILE:-/sys/fs/cgroup/cpu.pressure}"
     local host="${CDO_SPEED_HOST_PRESSURE_FILE:-/proc/pressure/cpu}"
     local susp0 susp1 stall0 stall1 hstall0 hstall1 t0 t1 prc=0
-    local c0 c1 c2 c3 c4 c5 perf_clock_wall=0
+    local c0 c1 c2 c3 c4 c5 perf_clock_wall=0 perf_stale=""
     awake_start
     [[ "$awake_base" == mono ]] || perf_clock_wall=1
     c0=0 susp0="$awake_s0"
@@ -553,8 +576,10 @@ run_perf_bounds() {
     elif ((c3 - c2 <= 0)); then
         shares+=("load not checked: no awake time measured over the run")
     else
-        perf_bounds_share "this cgroup's" "$stall0" "$stall1" $((c4 - c1)) $((c5 - c0))
-        perf_bounds_share "the host's" "$hstall0" "$hstall1" $((c3 - c2)) $((c4 - c1))
+        perf_bounds_share "this cgroup's" "$stall0" "$stall1" $((c4 - c1)) $((c5 - c0)) \
+            "$(perf_bounds_stale c0 c1 c4 c5)"
+        perf_bounds_share "the host's" "$hstall0" "$hstall1" $((c3 - c2)) $((c4 - c1)) \
+            "$(perf_bounds_stale c1 c2 c3 c4)"
     fi
     # Said whatever the shares were (review r1, sol).
     case "$calm_outcome" in

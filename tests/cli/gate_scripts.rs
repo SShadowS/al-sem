@@ -6478,19 +6478,23 @@ fn perf_bounds_labels_load() {
 }
 
 /// ⟨TLS-108⟩ A suspend during the run is labelled SUSPENDED (as cdo-speed labels
-/// it), and the stall share is of AWAKE time: 20 % of SHARE_RUN_S stalled in a
-/// run of SHARE_RUN_S + 4 s with 4 s asleep is 20 % of the awake time (UNDER
-/// LOAD), though only 12 % of the wall time. With no awake time over the run
+/// it), and the stall share is of AWAKE time: 24 % of SHARE_RUN_S stalled in a
+/// run of SHARE_RUN_S + 4 s with 4 s asleep is 24 % of the awake time (UNDER
+/// LOAD), though only 14.4 % of the wall time. With no awake time over the run
 /// there is no share, and it says so. (TLS-149: the awake time is
 /// scripts/awake-clock's; CDO_HOST_SUSPENDED_FILE fakes its suspend too; the
-/// awake part of the run is SHARE_RUN_S.)
+/// awake part of the run is SHARE_RUN_S.) The share is over the run plus its
+/// four clock brackets: 1.44 s stays above 15 % up to a 9.6 s interval, so the
+/// brackets may take 3.6 s together (~0.11 s each measured; Fable r1).
 ///
 /// Mutation (2026-11-20): the share taken over wall time (`awake_us` =
-/// `wall_us`) -> no "UNDER LOAD" (red); restored, green.
+/// `wall_us`) -> no "UNDER LOAD" (red); restored, green. Again on 2026-11-27
+/// (TLS-149, 24 %): this cgroup's share given `wall_us` as its interval -> FAILED
+/// ("this cgroup's CPU stall share was 14 %", no label); restored -> passed.
 #[cfg(target_os = "linux")]
 #[test]
 fn perf_bounds_labels_a_suspend() {
-    let (code, text) = perf_bounds_with_load(SHARE_RUN_S * 200_000, 0, 4, SHARE_RUN_S + 4, 0);
+    let (code, text) = perf_bounds_with_load(SHARE_RUN_S * 240_000, 0, 4, SHARE_RUN_S + 4, 0);
     assert_eq!(code, Some(0), "{text}");
     assert!(
         text.contains("SUSPENDED: the host slept 4 s during the timing"),
@@ -6567,18 +6571,22 @@ fn perf_bounds_labels_host_load() {
 ///   with its slot hold marked timed and the binary not yet started; the
 ///   binary runs after "calm enough";
 /// - the host stays loaded, with a poll far longer than the wait (600 s
-///   against 1 s): the nap it asks for, said in the log, is cut to the budget
+///   against 5 s): the nap it asks for, said in the log, is cut to the budget
 ///   left; then it runs, UNDER LOAD in the verdict, and the binary's exit stays
 ///   the step's;
 /// - the source goes while it waits, or is missing from the start: it runs,
 ///   said "calm not known", never "calm";
 /// - with no slot (a CI runner: no shared host) it does not wait, and says so.
 ///
-/// Every run has a watchdog: a wait that does not end fails the test.
+/// Every run has a watchdog (300 s: it covers the slot's acquire too, and costs
+/// nothing unless something hangs): a wait that does not end fails the test.
 ///
 /// Proof (2026-11-27): the `perf_bounds_wait_calm` call commented out of
 /// `run_perf_bounds` -> FAILED (no "is above 15 %: waiting" line: the binary ran
-/// at once); restored -> passed.
+/// at once); restored -> passed. The nap cut: the cut branch napping the whole
+/// 600 s poll (its log line kept) -> FAILED ("watchdog: the step ran past
+/// 300 s"); restored -> passed. "At most": `<=` made `<` -> FAILED (15.00 % never
+/// calm: no "calm enough after"); restored -> passed.
 #[cfg(target_os = "linux")]
 #[test]
 fn perf_bounds_waits_for_a_calm_host() {
@@ -6618,13 +6626,13 @@ fn perf_bounds_waits_for_a_calm_host() {
     let mut run = PerfBoundsRun::spawn(dir.path(), &body, &env("60", "0.2"));
     run.wait_for(
         "host CPU pressure 15.01 % (avg60) is above 15 %: waiting (up to 60 s)",
-        60,
+        300,
     );
     let status = slot_status();
     assert!(status.contains("timed by perf-bounds"), "{status}");
     assert!(!ran.exists(), "the binary ran during the wait");
     set_host("15.00");
-    let (code, text) = run.finish(60);
+    let (code, text) = run.finish(300);
     assert_eq!(code, Some(0), "{text}");
     let at = |s: &str| {
         text.find(s)
@@ -6637,10 +6645,11 @@ fn perf_bounds_waits_for_a_calm_host() {
     );
     assert!(!text.contains("UNDER LOAD"), "{text}");
 
-    // Stays loaded; a 600 s poll is cut to what is left of the 1 s budget (the
-    // nap asked for is in the log).
+    // Stays loaded; a 600 s poll is cut to what is left of the 5 s budget (the
+    // nap asked for is in the log). 5 s, not 1 s: the first look alone took
+    // 0.12 s on a loaded host, and must end inside the budget (Fable r1).
     set_host("40.00");
-    let (code, text) = PerfBoundsRun::spawn(dir.path(), "exit 7", &env("1", "600")).finish(60);
+    let (code, text) = PerfBoundsRun::spawn(dir.path(), "exit 7", &env("5", "600")).finish(300);
     assert_eq!(code, Some(7), "{text}");
     let nap: f64 = text
         .split_once("the next look is cut to the ")
@@ -6649,7 +6658,7 @@ fn perf_bounds_waits_for_a_calm_host() {
         .0
         .parse()
         .unwrap();
-    assert!(nap <= 1.0, "the nap is more than the budget: {text}");
+    assert!(nap <= 5.0, "the nap is more than the budget: {text}");
     assert!(
         text.contains("(avg60) stayed above 15 % for ")
             && text.contains("running anyway, UNDER LOAD"),
@@ -6658,7 +6667,7 @@ fn perf_bounds_waits_for_a_calm_host() {
     assert!(
         text.contains("exit 7; UNDER LOAD: ")
             && text.contains(
-                "the host's CPU pressure (avg60) stayed above 15 % for the whole 1 s wait before the run"
+                "the host's CPU pressure (avg60) stayed above 15 % for the whole 5 s wait before the run"
             ),
         "{text}"
     );
@@ -6666,9 +6675,9 @@ fn perf_bounds_waits_for_a_calm_host() {
     // The source goes while it waits.
     set_host("40.00");
     let mut run = PerfBoundsRun::spawn(dir.path(), &body, &env("60", "0.2"));
-    run.wait_for("is above 15 %: waiting", 60);
+    run.wait_for("is above 15 %: waiting", 300);
     std::fs::remove_file(&host).unwrap();
-    let (code, text) = run.finish(60);
+    let (code, text) = run.finish(300);
     assert_eq!(code, Some(0), "{text}");
     assert!(
         text.contains("host CPU pressure not readable any more (")
@@ -6683,7 +6692,7 @@ fn perf_bounds_waits_for_a_calm_host() {
     assert!(!text.contains("UNDER LOAD"), "{text}");
 
     // Missing from the start (the file is still gone).
-    let (code, text) = PerfBoundsRun::spawn(dir.path(), "true", &env("60", "0.2")).finish(60);
+    let (code, text) = PerfBoundsRun::spawn(dir.path(), "true", &env("60", "0.2")).finish(300);
     assert_eq!(code, Some(0), "{text}");
     assert!(
         // The step's own wait line (cdo-slot says "waiting" for its hold too).
@@ -6696,7 +6705,7 @@ fn perf_bounds_waits_for_a_calm_host() {
     set_host("40.00");
     let mut ci = env("60", "0.2");
     ci.push(("GITHUB_ACTIONS", "true".as_ref()));
-    let (code, text) = PerfBoundsRun::spawn(dir.path(), "true", &ci).finish(60);
+    let (code, text) = PerfBoundsRun::spawn(dir.path(), "true", &ci).finish(300);
     assert_eq!(code, Some(0), "{text}");
     assert!(
         text.contains("no CDO slot held (a GitHub Actions runner): no calm wait"),
@@ -6711,6 +6720,9 @@ fn perf_bounds_waits_for_a_calm_host() {
 /// ⟨TLS-149⟩ A PSI field is read whole (review r2, sol): `avg60=10junk` is no
 /// reading (the wait says "calm not known", never "calm"), and `total=123junk`
 /// (the host's) or `total=5junk` (this cgroup's) is no counter, so no share.
+///
+/// Proof (2026-11-27): the `$` anchor dropped from `psi_hundredths` -> FAILED
+/// ("host CPU pressure 10junk % (avg60): calm"); restored -> passed.
 #[cfg(target_os = "linux")]
 #[test]
 fn perf_bounds_reads_psi_fields_whole() {
@@ -6735,7 +6747,7 @@ fn perf_bounds_reads_psi_fields_whole() {
             ("CI_STEPS_CPU_PRESSURE_FILE", own.as_os_str()),
         ],
     )
-    .finish(60);
+    .finish(300);
     assert_eq!(code, Some(0), "{text}");
     assert!(
         // Not "(avg60): calm": the label's "...: calm not known" is expected.
@@ -6788,7 +6800,7 @@ fn perf_bounds_aligns_each_share_to_its_own_readings() {
             ("CI_STEPS_CPU_PRESSURE_FILE", own.as_os_str()),
         ],
     )
-    .finish(60);
+    .finish(300);
     assert_eq!(code, Some(0), "{text}");
     assert!(!text.contains("UNDER LOAD"), "{text}");
     assert!(
@@ -6798,9 +6810,67 @@ fn perf_bounds_aligns_each_share_to_its_own_readings() {
     );
 }
 
+/// ⟨TLS-149⟩ A failed clock reading gives no share (review r3, sol; Fable r1).
+/// awake-clock keeps the last time on a failed read (its first two in a row),
+/// so a failed c4 would read as c3: the host's interval would lose the slow
+/// reading while its stall kept it. Here only c4 fails: after a SHARE_RUN_S run
+/// the host's last reading waits ~2 s on a FIFO, the suspended reading (the fake
+/// clock's source) is broken just before that reading returns and mended
+/// before this cgroup's reading (a second FIFO) returns, so c5 is good again.
+/// The host stalled 1.5 s: ~25 % of the run alone. Both shares that use c4 are
+/// not available, there is no UNDER LOAD, and the exit (5) stays the binary's.
+///
+/// Proof (2026-11-27): the `awake_fails` line dropped from `perf_bounds_clock`
+/// -> FAILED ("the host's CPU stall share was 23 % (above 15 %)", UNDER LOAD);
+/// restored -> passed.
+#[cfg(target_os = "linux")]
+#[test]
+fn perf_bounds_gives_no_share_from_a_failed_clock_reading() {
+    let dir = tempfile::tempdir().unwrap();
+    let host = dir.path().join("host.pressure");
+    let own = dir.path().join("cpu.pressure");
+    let suspended = dir.path().join("suspended");
+    std::fs::write(&host, host_pressure_line("1.00", 5000)).unwrap();
+    std::fs::write(&own, pressure_line(1000)).unwrap();
+    std::fs::write(&suspended, "100").unwrap();
+    let body = format!(
+        "sleep {SHARE_RUN_S}\nrm -f '{h}' '{o}'\nmkfifo '{h}' '{o}'\n\
+         (sleep 2; echo bad > '{s}'; printf '%s' '{host_line}' > '{h}'; \
+          sleep 1; echo 100 > '{s}'; printf '%s' '{own_line}' > '{o}') >/dev/null 2>&1 &\n\
+         exit 5",
+        h = host.display(),
+        o = own.display(),
+        s = suspended.display(),
+        host_line = host_pressure_line("1.00", 5000 + 1_500_000),
+        own_line = pressure_line(1000),
+    );
+    let (code, text) = PerfBoundsRun::spawn(
+        dir.path(),
+        &body,
+        &[
+            ("CDO_SPEED_HOST_PRESSURE_FILE", host.as_os_str()),
+            ("CI_STEPS_CPU_PRESSURE_FILE", own.as_os_str()),
+            ("CDO_HOST_SUSPENDED_FILE", suspended.as_os_str()),
+        ],
+    )
+    .finish(300);
+    assert_eq!(code, Some(5), "the exit stays the binary's: {text}");
+    assert!(
+        text.contains("the host's CPU stall share not available: a clock reading failed (c4)")
+            && text.contains(
+                "this cgroup's CPU stall share not available: a clock reading failed (c4)"
+            ),
+        "{text}"
+    );
+    assert!(!text.contains("UNDER LOAD"), "{text}");
+}
+
 /// ⟨TLS-149⟩ With no awake clock (awake-clock falls back to wall time: here
 /// host-suspended cannot read its file), nothing is called an awake share, and
 /// the wait says it counts wall time, its timeout too (review r2, sol).
+///
+/// Proof (2026-11-27): the `perf_clock_wall` branch made `if false` -> FAILED
+/// (shares computed on wall time); restored -> passed.
 #[cfg(target_os = "linux")]
 #[test]
 fn perf_bounds_says_when_the_awake_clock_fails() {
@@ -6820,7 +6890,7 @@ fn perf_bounds_says_when_the_awake_clock_fails() {
             ),
         ],
     )
-    .finish(60);
+    .finish(300);
     assert_eq!(code, Some(3), "{text}");
     assert!(
         text.contains("the awake clock cannot be read: this wait counts wall time")
