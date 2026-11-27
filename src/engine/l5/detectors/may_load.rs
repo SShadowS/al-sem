@@ -50,6 +50,17 @@ const MAX_DEPTH: usize = 512;
 /// tracked variable plus one; a loop that has not settled by then answers "may be loaded".
 const MAX_LOOP_ROUNDS: usize = 64;
 
+/// The loads whose `false` result means they found, so loaded, nothing (ENG-177 sol r1, Fable r3):
+/// a branch that says one returned false has not loaded the record through it.
+const TESTED_LOADS: &[&str] = &[
+    "Get",
+    "GetBySystemId",
+    "Find",
+    "FindFirst",
+    "FindLast",
+    "FindSet",
+];
+
 /// One flag per tracked variable (may it be loaded?); `None` when no path reaches the point.
 type State = Option<Vec<bool>>;
 
@@ -348,8 +359,12 @@ impl<'a> Walk<'a> {
                     if op.id == self.target_id {
                         self.at_target = join(self.at_target.take(), &st);
                     }
-                    // A tested operation on the branch that says it found nothing.
+                    // A tested operation on the branch that says it found nothing. Only a
+                    // Get/Find's `false` means "nothing loaded"; a false `Insert` means the row
+                    // exists, with the record as filled as after a true one (Fable r3: the upsert
+                    // `if not A.Insert() then A.Modify()`).
                     let missed = match (self.branch, n.missed_on()) {
+                        _ if !TESTED_LOADS.contains(&op.op.as_str()) => false,
                         (Some(then), Some((on_then, on_else))) => {
                             if then {
                                 on_then

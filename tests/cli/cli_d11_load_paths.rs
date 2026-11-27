@@ -479,6 +479,47 @@ codeunit 50501 "E Mgt"
         B.Modify();
     end;
 
+    // Silent (Fable r3): the upsert. A false Insert means the row exists; the record is as filled as
+    // after a true one, so the Modify runs on a loaded record.
+    procedure UpsertModify(Key: Integer)
+    var A: Record "E Entry";
+    begin
+        A.K := Key;
+        if not A.Insert() then
+            A.Modify();
+    end;
+
+    // Silent: `X <> true` is `not X`; past it Get found a record.
+    procedure NeTrueExit()
+    var A: Record "E Entry";
+    begin
+        if A.Get(1) <> true then
+            exit;
+        A.Modify();
+    end;
+
+    // Reported: `while false` never runs its body, so its Get loads nothing.
+    procedure WhileFalseSkipsBody()
+    var A: Record "E Entry";
+    begin
+        while false do
+            A.Get(1);
+        A.Modify();
+    end;
+
+    // Silent: `until false` ends only by the exit, so the Modify never runs.
+    procedure RepeatUntilFalse(C: Boolean)
+    var B: Record "E Entry";
+    begin
+        repeat
+            if C then begin
+                B.Get(1);
+                exit;
+            end;
+        until false;
+        B.Modify();
+    end;
+
     // Reported (sol r3): `X and true` is X.
     procedure AndTrueExit()
     var A: Record "E Entry";
@@ -628,13 +669,18 @@ fn reported(dir: &Path, detector: &str) -> BTreeSet<String> {
 /// `may_load` reading the other branch's `missed_on` fails `TestedGetExit`, `TestedFindExit`,
 /// `OrTestedExit` and `NotTestedGetExit`; `ir_walk::tested_ops`'s `and` passing a false value to its
 /// operands fails `AndTestedExit`, its `or` passing none fails `OrTestedExit`, and `not` not
-/// flipping fails `NotInOrExit` and `NotTestedGetExit`. sol r3: `X or true` read as X reports
-/// `OrTrueExit` (a false finding: that Modify never runs); `X = false` not flipped reports
+/// flipping fails `NotInOrExit` and `NotTestedGetExit`. sol r3: `X or true` read as X reported
+/// `OrTrueExit` (a false finding: that Modify never runs) before sol r4's constant fold; with the
+/// fold that branch never runs whatever `tested_ops` says, so `OrTrueExit` is pinned by the fold's
+/// break below (Fable r3). `X <> true` not flipped reports `NeTrueExit`; `X = false` not flipped
+/// reports
 /// `EqFalseExit`; a `while` condition left unmarked fails `WhileTestedExit`; a `repeat`'s exit and
 /// loop-back states swapped fails `UntilNotTested`. sol r4: `may_load::cond` ignoring a constant
 /// condition reports `ConstTrueSkipsElse` and `WhileTrueExits` (false findings: neither Modify
 /// runs; a `while true` left by `break` after the Get stayed silent under that break, since the
-/// break path carries the load). The ternary run walked in sequence fails
+/// break path carries the load); ignoring a constant `false` drops `WhileFalseSkipsBody` and
+/// reports `RepeatUntilFalse`. Fable r3: a missed mark honoured on `Insert` too reports
+/// `UpsertModify` (a false finding). The ternary run walked in sequence fails
 /// `TernaryExclusive`; each side walked from an empty state instead of the run's entry fails
 /// `TernaryKeepsEntryLoad` (`TernaryLoadThenModify` alone stayed green under that break: its load
 /// is inside the ternary).
@@ -670,6 +716,7 @@ fn a_load_must_reach_the_operation_on_some_path() {
             "TestedFindExit",
             "TestedGetExit",
             "UntilNotTested",
+            "WhileFalseSkipsBody",
             "WhileTestedExit",
         ])
     );

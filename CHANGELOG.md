@@ -1276,7 +1276,9 @@ ran beside the timing).
     loop that does not settle, and a named record return value (`procedure F() R: Record X`):
     the model does not hold the name yet, so `R` is not tracked and never reported until ENG-209
     adds it (it starts unloaded, like a local).
-  - A tested load loads only where it found a record (sol r1, r2):
+  - A tested `Get`/`Find` loads only where it found a record (sol r1, r2); a tested `Insert`
+    loads on both branches (a false `Insert` means the row exists, the record as filled as
+    after a true one: the upsert `if not A.Insert() then A.Modify()` stays silent, Fable r3):
     `if A.Get(1) then exit; A.Modify()` is reported, `if not A.Get(1) then exit; A.Modify()` is
     silent, with or without parentheses (`if A.FindFirst then`), and inside `and`/`or`: past a
     false `A.Get(1) or B` the Get found nothing (reported), past a false `A.Get(1) and B` it may
