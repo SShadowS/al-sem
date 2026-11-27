@@ -221,6 +221,39 @@ fn repo() -> Repo {
     r
 }
 
+/// ⟨TLS-149⟩ A red ci quotes perf-bounds' verdict line under land's, load and
+/// all: it holds no FAIL (`exit 101; UNDER LOAD: ...`), so the FAIL filter
+/// missed it (review r1, sol). A perf-bounds that passed (exit 0) is not quoted.
+///
+/// Proof (2026-11-27): the new perf-bounds `grep` in land's `verdict` commented
+/// out -> FAILED (the line not quoted); restored -> passed.
+#[test]
+fn land_quotes_a_failed_perf_bounds_verdict() {
+    let r = repo();
+    let line = "ci-steps: perf-bounds timing: 18662 ms, exit 101; UNDER LOAD: this cgroup's CPU stall share was 3 %; the host's CPU stall share was 36 % (above 15 %)";
+    let hook = format!("echo \"{line}\"; echo 'ci-steps: FAILED at perf-bounds'");
+    let (code, text) = r.land(
+        &["tools/tls-58-x"],
+        &[("STUB_CI_STEPS_RC", "1"), ("STUB_CI_STEPS_HOOK", &hook)],
+    );
+    assert_eq!(code, Some(1), "{text}");
+    assert!(text.contains("land: [ci] FAILED, exit 1 ("), "{text}");
+    assert!(text.contains(&format!("land:   | {line}\n")), "{text}");
+
+    let passed =
+        "ci-steps: perf-bounds timing: 9000 ms, exit 0; (this cgroup's CPU stall share was 1 %)";
+    let hook = format!("echo \"{passed}\"; echo 'ci-steps: FAILED at test'");
+    let (code, text) = r.land(
+        &["tools/tls-59-x"],
+        &[("STUB_CI_STEPS_RC", "1"), ("STUB_CI_STEPS_HOOK", &hook)],
+    );
+    assert_eq!(code, Some(1), "{text}");
+    assert!(
+        !text.contains("land:   | ci-steps: perf-bounds timing"),
+        "{text}"
+    );
+}
+
 /// A batch with a CHANGELOG-only conflict of additions merges (both entries
 /// kept, master's first, a blank line between), prints the merge order and a
 /// verdict per step, runs ci, mem-wait, then cdo-gate in that order, and

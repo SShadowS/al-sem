@@ -1941,8 +1941,17 @@ fn ci_steps_all_runs_and_judges_the_agentflow_suite() {
         repo.join("scripts/build-entry"),
     )
     .unwrap();
+    // TLS-149: `perf-bounds` sources awake-clock. Its host-suspended is a stub
+    // below: the real one runs python3, which this test stubs and counts.
+    std::fs::copy(
+        concat!(env!("CARGO_MANIFEST_DIR"), "/scripts/awake-clock"),
+        repo.join("scripts/awake-clock"),
+    )
+    .unwrap();
     // ENG-110: `build` runs check-ir-image on the binary; the stub build makes none.
     for s in [
+        // TLS-149: prints no clock, so awake-clock counts wall time (said in the line).
+        "host-suspended",
         "tree-stamp",
         "require-rttime",
         "nextest-priority-check",
@@ -5987,6 +5996,26 @@ fn perf_bounds_step(
     body: &str,
     extra: &[(&str, &std::ffi::OsStr)],
 ) -> (Option<i32>, String) {
+    let out = perf_bounds_cmd(dir, body, extra)
+        .output()
+        .expect("spawn ci-steps perf-bounds");
+    (
+        out.status.code(),
+        format!(
+            "{}{}",
+            String::from_utf8_lossy(&out.stdout),
+            String::from_utf8_lossy(&out.stderr)
+        ),
+    )
+}
+
+/// The command [`perf_bounds_step`] runs.
+#[cfg(target_os = "linux")]
+fn perf_bounds_cmd(
+    dir: &std::path::Path,
+    body: &str,
+    extra: &[(&str, &std::ffi::OsStr)],
+) -> std::process::Command {
     use std::os::unix::fs::PermissionsExt;
     let bin = dir.join("perf-bounds-stand-in");
     // ⟨TLS-113⟩ The step first asks the binary for its tests (`--list`): the
@@ -6018,19 +6047,98 @@ fn perf_bounds_step(
         .arg(concat!(env!("CARGO_MANIFEST_DIR"), "/scripts/ci-steps"))
         .arg("perf-bounds")
         .current_dir(env!("CARGO_MANIFEST_DIR"))
-        .env("CI_STEPS_PERF_BOUNDS_BIN", &bin);
+        .env("CI_STEPS_PERF_BOUNDS_BIN", &bin)
+        // TLS-149: no host pressure (no wait for the real host) unless `extra` gives one.
+        .env("CDO_SPEED_HOST_PRESSURE_FILE", "/dev/null");
     for (k, v) in extra {
         cmd.env(k, v);
     }
-    let out = cmd.output().expect("spawn ci-steps perf-bounds");
-    (
-        out.status.code(),
-        format!(
-            "{}{}",
-            String::from_utf8_lossy(&out.stdout),
-            String::from_utf8_lossy(&out.stderr)
-        ),
-    )
+    cmd
+}
+
+/// ⟨TLS-149⟩ A `ci-steps perf-bounds` ([`perf_bounds_cmd`]) running in its own
+/// process group (killed with it when dropped): its stdout and stderr lines
+/// come on one channel, and every wait on it has a watchdog, so a wait that
+/// never ends fails the test instead of hanging it.
+#[cfg(target_os = "linux")]
+struct PerfBoundsRun {
+    child: crate::cdo_slot::Reap,
+    lines: std::sync::mpsc::Receiver<String>,
+    text: String,
+}
+
+#[cfg(target_os = "linux")]
+impl PerfBoundsRun {
+    fn spawn(dir: &std::path::Path, body: &str, extra: &[(&str, &std::ffi::OsStr)]) -> Self {
+        use std::io::BufRead;
+        let mut cmd = perf_bounds_cmd(dir, body, extra);
+        // Its own group already (private_slot): Reap kills the group.
+        let mut child = cmd
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped())
+            .spawn()
+            .expect("spawn ci-steps perf-bounds");
+        let (tx, lines) = std::sync::mpsc::channel();
+        let out: Box<dyn std::io::Read + Send> = Box::new(child.stdout.take().unwrap());
+        let err: Box<dyn std::io::Read + Send> = Box::new(child.stderr.take().unwrap());
+        for stream in [out, err] {
+            let tx = tx.clone();
+            std::thread::spawn(move || {
+                for line in std::io::BufReader::new(stream)
+                    .lines()
+                    .map_while(Result::ok)
+                {
+                    let _ = tx.send(line);
+                }
+            });
+        }
+        Self {
+            child: crate::cdo_slot::Reap(child),
+            lines,
+            text: String::new(),
+        }
+    }
+
+    /// Waits (at most `secs`) for a line holding `what`; the text so far.
+    fn wait_for(&mut self, what: &str, secs: u64) -> &str {
+        let end = std::time::Instant::now() + std::time::Duration::from_secs(secs);
+        while !self.text.contains(what) {
+            let left = end.saturating_duration_since(std::time::Instant::now());
+            match self.lines.recv_timeout(left) {
+                Ok(l) => {
+                    self.text.push_str(&l);
+                    self.text.push('\n');
+                }
+                Err(_) => panic!("watchdog: no {what:?} within {secs} s: {}", self.text),
+            }
+        }
+        &self.text
+    }
+
+    /// Waits (at most `secs`) for the step to end: (exit code, all its text).
+    fn finish(mut self, secs: u64) -> (Option<i32>, String) {
+        let end = std::time::Instant::now() + std::time::Duration::from_secs(secs);
+        let status = loop {
+            if let Some(s) = self.child.try_wait().unwrap() {
+                break s;
+            }
+            assert!(
+                std::time::Instant::now() < end,
+                "watchdog: the step ran past {secs} s: {}",
+                self.text
+            );
+            std::thread::sleep(std::time::Duration::from_millis(50));
+        };
+        // The readers end with the pipes; give them a moment to drain.
+        while let Ok(l) = self
+            .lines
+            .recv_timeout(std::time::Duration::from_millis(500))
+        {
+            self.text.push_str(&l);
+            self.text.push('\n');
+        }
+        (status.code(), std::mem::take(&mut self.text))
+    }
 }
 
 /// The stand-in body that prints the slot's status from inside the timed run.
@@ -6287,19 +6395,52 @@ fn pressure_line(total: u64) -> String {
     )
 }
 
-/// ⟨TLS-108⟩ The step's run with the stall total moved by `stalled_us` while the
-/// stand-in sleeps `run_s` s, and the suspended reading moved by `slept_s`.
+/// ⟨TLS-149⟩ A host /proc/pressure/cpu with `some avg60=<avg60> total=<total>`.
 #[cfg(target_os = "linux")]
-fn perf_bounds_with_load(stalled_us: u64, slept_s: u64, run_s: u64) -> (Option<i32>, String) {
+fn host_pressure_line(avg60: &str, total: u64) -> String {
+    format!(
+        "some avg10=0.00 avg60={avg60} avg300=0.00 total={total}\nfull avg10=0.00 avg60=0.00 avg300=0.00 total=0\n"
+    )
+}
+
+/// ⟨TLS-149⟩ How long (awake seconds) a stand-in run must last for a test that
+/// expects a share, so a slow host cannot turn it into "not available" (a
+/// load-only flake, as TLS-150 was). ci-steps gives a source a share only while
+/// its two brackets cover at most a quarter of its interval (perf_bounds_share).
+/// Each bracket is one awake-clock read plus one PSI read: ~100 ms measured on
+/// 2026-11-27 at host pressure 43 % (host-suspended's python; 30-50 ms calm).
+/// Allowing 10x that, 1 s a bracket, a source's two brackets take 2 s. The
+/// host's interval is the binding one (the cgroup's holds it, with as many
+/// brackets): the run plus its 2 s of brackets, which must be at least 4 x 2 s,
+/// so the run must be at least 6 s.
+#[cfg(target_os = "linux")]
+const SHARE_RUN_S: u64 = 6;
+
+/// ⟨TLS-108, TLS-149⟩ The step's run with this cgroup's stall total moved by
+/// `stalled_us` and the host's by `host_stalled_us` (its avg60 calm) while the
+/// stand-in sleeps `run_s` s, the suspended reading moved by `slept_s`; the
+/// stand-in then exits `rc`.
+#[cfg(target_os = "linux")]
+fn perf_bounds_with_load(
+    stalled_us: u64,
+    host_stalled_us: u64,
+    slept_s: u64,
+    run_s: u64,
+    rc: i32,
+) -> (Option<i32>, String) {
     let dir = tempfile::tempdir().unwrap();
     let pressure = dir.path().join("cpu.pressure");
+    let host = dir.path().join("host.pressure");
     let suspended = dir.path().join("suspended");
     std::fs::write(&pressure, pressure_line(1000)).unwrap();
+    std::fs::write(&host, host_pressure_line("1.00", 5000)).unwrap();
     std::fs::write(&suspended, "100").unwrap();
     let body = format!(
-        "sleep {run_s}\nprintf '%s' '{}' > '{}'\necho {} > '{}'",
+        "sleep {run_s}\nprintf '%s' '{}' > '{}'\nprintf '%s' '{}' > '{}'\necho {} > '{}'\nexit {rc}",
         pressure_line(1000 + stalled_us),
         pressure.display(),
+        host_pressure_line("1.00", 5000 + host_stalled_us),
+        host.display(),
         100 + slept_s,
         suspended.display()
     );
@@ -6308,56 +6449,470 @@ fn perf_bounds_with_load(stalled_us: u64, slept_s: u64, run_s: u64) -> (Option<i
         &body,
         &[
             ("CI_STEPS_CPU_PRESSURE_FILE", pressure.as_os_str()),
+            ("CDO_SPEED_HOST_PRESSURE_FILE", host.as_os_str()),
             ("CDO_HOST_SUSPENDED_FILE", suspended.as_os_str()),
         ],
     )
 }
 
-/// ⟨TLS-108⟩ A run under load is labelled, never hidden and never excused: 600 ms
-/// stalled in about 1 s is above 15 % (UNDER LOAD); 10 ms is below (the share is
+/// ⟨TLS-108⟩ A run under load is labelled, never hidden and never excused: 60 %
+/// of the run stalled is above 15 % (UNDER LOAD); 1 % is below (the share is
 /// printed, no label); the binary's exit (0) stays the verdict either way.
+/// (TLS-149: runs of SHARE_RUN_S, stalls scaled to them.)
 ///
 /// Mutation (2026-11-20): the share compared the wrong way (`<`) -> no "UNDER
 /// LOAD" at 600 ms (red); restored, green.
 #[cfg(target_os = "linux")]
 #[test]
 fn perf_bounds_labels_load() {
-    let (code, text) = perf_bounds_with_load(600_000, 0, 1);
+    let (code, text) = perf_bounds_with_load(SHARE_RUN_S * 600_000, 0, 0, SHARE_RUN_S, 0);
     assert_eq!(code, Some(0), "{text}");
     assert!(
         text.contains("exit 0; UNDER LOAD: this cgroup's CPU stall share was "),
         "{text}"
     );
-    let (code, text) = perf_bounds_with_load(10_000, 0, 1);
+    let (code, text) = perf_bounds_with_load(SHARE_RUN_S * 10_000, 0, 0, SHARE_RUN_S, 0);
     assert_eq!(code, Some(0), "{text}");
     assert!(!text.contains("UNDER LOAD"), "{text}");
     assert!(text.contains("(this cgroup's CPU stall share "), "{text}");
 }
 
 /// ⟨TLS-108⟩ A suspend during the run is labelled SUSPENDED (as cdo-speed labels
-/// it), and the stall share is of AWAKE time: 250 ms stalled in a 2 s run with
-/// 1 s asleep is 25 % of the awake second (UNDER LOAD), though only ~12 % of the
-/// wall time. A suspend covering the whole run says so instead of a share.
+/// it), and the stall share is of AWAKE time: 20 % of SHARE_RUN_S stalled in a
+/// run of SHARE_RUN_S + 4 s with 4 s asleep is 20 % of the awake time (UNDER
+/// LOAD), though only 12 % of the wall time. With no awake time over the run
+/// there is no share, and it says so. (TLS-149: the awake time is
+/// scripts/awake-clock's; CDO_HOST_SUSPENDED_FILE fakes its suspend too; the
+/// awake part of the run is SHARE_RUN_S.)
 ///
 /// Mutation (2026-11-20): the share taken over wall time (`awake_us` =
 /// `wall_us`) -> no "UNDER LOAD" (red); restored, green.
 #[cfg(target_os = "linux")]
 #[test]
 fn perf_bounds_labels_a_suspend() {
-    let (code, text) = perf_bounds_with_load(250_000, 1, 2);
+    let (code, text) = perf_bounds_with_load(SHARE_RUN_S * 200_000, 0, 4, SHARE_RUN_S + 4, 0);
     assert_eq!(code, Some(0), "{text}");
     assert!(
-        text.contains("SUSPENDED: the host slept 1 s during the timing"),
+        text.contains("SUSPENDED: the host slept 4 s during the timing"),
         "{text}"
     );
     assert!(text.contains("UNDER LOAD: "), "share of awake time: {text}");
-    let (code, text) = perf_bounds_with_load(0, 5, 1);
+    let (code, text) = perf_bounds_with_load(0, 0, 5, 1, 0);
     assert_eq!(code, Some(0), "{text}");
     assert!(
-        text.contains("(load not checked: the host slept through the run)")
+        text.contains("(load not checked: no awake time measured over the run)")
             && text.contains("SUSPENDED: the host slept 5 s during the timing"),
         "{text}"
     );
+}
+
+/// ⟨TLS-149⟩ Other projects' load, as in TLS-122's landing (this cgroup 3 %, the
+/// host's avg300 36 %): the host's stall share over the run is printed beside
+/// this cgroup's, and above 15 % it labels the verdict UNDER LOAD. The failure
+/// stays a failure (the binary's 101 is the step's). A calm host: both shares,
+/// no label.
+///
+/// Proof (2026-11-27): the host's `perf_bounds_share` call commented out of
+/// `run_perf_bounds` -> FAILED ("no host share": the line gave only this
+/// cgroup's 2 %); restored -> passed.
+#[cfg(target_os = "linux")]
+#[test]
+fn perf_bounds_labels_host_load() {
+    let timing = |text: &str| {
+        text.lines()
+            .find(|l| l.starts_with("ci-steps: perf-bounds timing: "))
+            .unwrap_or_else(|| panic!("no timing line: {text}"))
+            .to_string()
+    };
+    // Runs of SHARE_RUN_S: this cgroup 3 %, the host 60 %, then both 3 %.
+    let (code, text) = perf_bounds_with_load(
+        SHARE_RUN_S * 30_000,
+        SHARE_RUN_S * 600_000,
+        0,
+        SHARE_RUN_S,
+        101,
+    );
+    assert_eq!(code, Some(101), "a failure stays one: {text}");
+    let line = timing(&text);
+    let (own, host) = line
+        .split_once("; the host's CPU stall share was ")
+        .unwrap_or_else(|| panic!("no host share: {line}"));
+    assert!(
+        own.contains("exit 101; UNDER LOAD: this cgroup's CPU stall share was ")
+            && !own.contains("above"),
+        "{line}"
+    );
+    assert!(host.ends_with("% (above 15 %)"), "{line}");
+    let (code, text) = perf_bounds_with_load(
+        SHARE_RUN_S * 30_000,
+        SHARE_RUN_S * 30_000,
+        0,
+        SHARE_RUN_S,
+        0,
+    );
+    assert_eq!(code, Some(0), "{text}");
+    let line = timing(&text);
+    assert!(!line.contains("UNDER LOAD"), "{line}");
+    assert!(
+        line.contains("exit 0; (this cgroup's CPU stall share was ")
+            && line.contains("; the host's CPU stall share was "),
+        "{line}"
+    );
+}
+
+/// ⟨TLS-149⟩ Before the timing, inside its hold, the step waits for the host's
+/// `some avg60` to fall to 15 % (cdo-speed's TLS-76 admission, its knobs):
+/// - calm only once the host falls from 15.01 % to 15.00 % ("at most", as
+///   cdo-speed): the fixture flips only after the step said it was waiting,
+///   with its slot hold marked timed and the binary not yet started; the
+///   binary runs after "calm enough";
+/// - the host stays loaded, with a poll far longer than the wait (600 s
+///   against 1 s): the nap it asks for, said in the log, is cut to the budget
+///   left; then it runs, UNDER LOAD in the verdict, and the binary's exit stays
+///   the step's;
+/// - the source goes while it waits, or is missing from the start: it runs,
+///   said "calm not known", never "calm";
+/// - with no slot (a CI runner: no shared host) it does not wait, and says so.
+///
+/// Every run has a watchdog: a wait that does not end fails the test.
+///
+/// Proof (2026-11-27): the `perf_bounds_wait_calm` call commented out of
+/// `run_perf_bounds` -> FAILED (no "is above 15 %: waiting" line: the binary ran
+/// at once); restored -> passed.
+#[cfg(target_os = "linux")]
+#[test]
+fn perf_bounds_waits_for_a_calm_host() {
+    let dir = tempfile::tempdir().unwrap();
+    let host = dir.path().join("host.pressure");
+    // This cgroup's stalls held still: its share is 0 %, whatever the real load.
+    let own = dir.path().join("cpu.pressure");
+    std::fs::write(&own, pressure_line(1000)).unwrap();
+    let ran = dir.path().join("ran");
+    let body = format!("touch '{}'; echo stand-in ran", ran.display());
+    // Renamed into place: a reader never sees a half-written file.
+    let set_host = |avg60: &str| {
+        let tmp = host.with_extension("tmp");
+        std::fs::write(&tmp, host_pressure_line(avg60, 0)).unwrap();
+        std::fs::rename(&tmp, &host).unwrap();
+    };
+    let env = |wait: &'static str, poll: &'static str| {
+        vec![
+            ("CDO_SPEED_HOST_PRESSURE_FILE", host.as_os_str()),
+            ("CI_STEPS_CPU_PRESSURE_FILE", own.as_os_str()),
+            ("CDO_SPEED_CALM_WAIT_S", wait.as_ref()),
+            ("CDO_SPEED_CALM_POLL_S", poll.as_ref()),
+        ]
+    };
+    let slot_status = || {
+        let mut cmd = crate::clean_env::command("bash");
+        let out = private_slot(&mut cmd, dir.path())
+            .arg(concat!(env!("CARGO_MANIFEST_DIR"), "/scripts/cdo-slot"))
+            .arg("status")
+            .output()
+            .unwrap();
+        String::from_utf8_lossy(&out.stdout).into_owned() + &String::from_utf8_lossy(&out.stderr)
+    };
+
+    // Calm at 15.00, not at 15.01; the binary waits for it.
+    set_host("15.01");
+    let mut run = PerfBoundsRun::spawn(dir.path(), &body, &env("60", "0.2"));
+    run.wait_for(
+        "host CPU pressure 15.01 % (avg60) is above 15 %: waiting (up to 60 s)",
+        60,
+    );
+    let status = slot_status();
+    assert!(status.contains("timed by perf-bounds"), "{status}");
+    assert!(!ran.exists(), "the binary ran during the wait");
+    set_host("15.00");
+    let (code, text) = run.finish(60);
+    assert_eq!(code, Some(0), "{text}");
+    let at = |s: &str| {
+        text.find(s)
+            .unwrap_or_else(|| panic!("missing {s:?}: {text}"))
+    };
+    assert!(
+        at("is above 15 %: waiting") < at("host CPU pressure 15.00 % (avg60), calm enough after ")
+            && at("calm enough after ") < at("stand-in ran"),
+        "{text}"
+    );
+    assert!(!text.contains("UNDER LOAD"), "{text}");
+
+    // Stays loaded; a 600 s poll is cut to what is left of the 1 s budget (the
+    // nap asked for is in the log).
+    set_host("40.00");
+    let (code, text) = PerfBoundsRun::spawn(dir.path(), "exit 7", &env("1", "600")).finish(60);
+    assert_eq!(code, Some(7), "{text}");
+    let nap: f64 = text
+        .split_once("the next look is cut to the ")
+        .and_then(|(_, rest)| rest.split_once(" s left of the wait (poll 600 s)"))
+        .unwrap_or_else(|| panic!("no cut nap: {text}"))
+        .0
+        .parse()
+        .unwrap();
+    assert!(nap <= 1.0, "the nap is more than the budget: {text}");
+    assert!(
+        text.contains("(avg60) stayed above 15 % for ")
+            && text.contains("running anyway, UNDER LOAD"),
+        "{text}"
+    );
+    assert!(
+        text.contains("exit 7; UNDER LOAD: ")
+            && text.contains(
+                "the host's CPU pressure (avg60) stayed above 15 % for the whole 1 s wait before the run"
+            ),
+        "{text}"
+    );
+
+    // The source goes while it waits.
+    set_host("40.00");
+    let mut run = PerfBoundsRun::spawn(dir.path(), &body, &env("60", "0.2"));
+    run.wait_for("is above 15 %: waiting", 60);
+    std::fs::remove_file(&host).unwrap();
+    let (code, text) = run.finish(60);
+    assert_eq!(code, Some(0), "{text}");
+    assert!(
+        text.contains("host CPU pressure not readable any more (")
+            && text.contains("running, calm not known"),
+        "{text}"
+    );
+    assert!(
+        text.contains("the host's CPU pressure was not readable before the run: calm not known")
+            && text.contains("the host's CPU stall share not readable"),
+        "{text}"
+    );
+    assert!(!text.contains("UNDER LOAD"), "{text}");
+
+    // Missing from the start (the file is still gone).
+    let (code, text) = PerfBoundsRun::spawn(dir.path(), "true", &env("60", "0.2")).finish(60);
+    assert_eq!(code, Some(0), "{text}");
+    assert!(
+        // The step's own wait line (cdo-slot says "waiting" for its hold too).
+        text.contains("no host CPU pressure readable (")
+            && !text.contains("is above 15 %: waiting"),
+        "{text}"
+    );
+
+    // No slot: no wait.
+    set_host("40.00");
+    let mut ci = env("60", "0.2");
+    ci.push(("GITHUB_ACTIONS", "true".as_ref()));
+    let (code, text) = PerfBoundsRun::spawn(dir.path(), "true", &ci).finish(60);
+    assert_eq!(code, Some(0), "{text}");
+    assert!(
+        text.contains("no CDO slot held (a GitHub Actions runner): no calm wait"),
+        "{text}"
+    );
+    assert!(
+        !text.contains("is above 15 %: waiting"),
+        "no wait on a CI runner: {text}"
+    );
+}
+
+/// ⟨TLS-149⟩ A PSI field is read whole (review r2, sol): `avg60=10junk` is no
+/// reading (the wait says "calm not known", never "calm"), and `total=123junk`
+/// (the host's) or `total=5junk` (this cgroup's) is no counter, so no share.
+#[cfg(target_os = "linux")]
+#[test]
+fn perf_bounds_reads_psi_fields_whole() {
+    let dir = tempfile::tempdir().unwrap();
+    let host = dir.path().join("host.pressure");
+    let own = dir.path().join("cpu.pressure");
+    std::fs::write(
+        &host,
+        "some avg10=0.00 avg60=10junk avg300=0.00 total=123junk\nfull avg10=0.00 avg60=0.00 avg300=0.00 total=0\n",
+    )
+    .unwrap();
+    std::fs::write(
+        &own,
+        "some avg10=0.00 avg60=0.00 avg300=0.00 total=5junk\nfull avg10=0.00 avg60=0.00 avg300=0.00 total=0\n",
+    )
+    .unwrap();
+    let (code, text) = PerfBoundsRun::spawn(
+        dir.path(),
+        "true",
+        &[
+            ("CDO_SPEED_HOST_PRESSURE_FILE", host.as_os_str()),
+            ("CI_STEPS_CPU_PRESSURE_FILE", own.as_os_str()),
+        ],
+    )
+    .finish(60);
+    assert_eq!(code, Some(0), "{text}");
+    assert!(
+        // Not "(avg60): calm": the label's "...: calm not known" is expected.
+        text.contains("no host CPU pressure readable (") && !text.contains("(avg60): calm"),
+        "{text}"
+    );
+    assert!(
+        text.contains("this cgroup's CPU stall share not readable")
+            && text.contains("the host's CPU stall share not readable"),
+        "{text}"
+    );
+}
+
+/// ⟨TLS-149⟩ Each share has its own interval (review r2, sol). A run of
+/// SHARE_RUN_S (6 s); then a host reading held ~3 s (a FIFO its writer fills
+/// late; under psi_some's 5 s cut) while this cgroup stalls 1 s:
+/// - the host gets no share: its brackets (~3 s and more) cover more than a
+///   quarter of its interval (~9 s), and a slower clock only widens them;
+/// - this cgroup's share is over its own interval (~9 s or more: at most ~11 %),
+///   not over the 6 s run (~17 %, UNDER LOAD made by the slow reading).
+///
+/// Proof (2026-11-27): this cgroup's share given the run's interval (`c3 - c2`
+/// for both bounds) -> FAILED ("this cgroup's CPU stall share was 16 % (above
+/// 15 %)", UNDER LOAD; the host's readings took 3040 ms of its 9078 ms);
+/// restored -> passed.
+#[cfg(target_os = "linux")]
+#[test]
+fn perf_bounds_aligns_each_share_to_its_own_readings() {
+    let dir = tempfile::tempdir().unwrap();
+    let host = dir.path().join("host.pressure");
+    let own = dir.path().join("cpu.pressure");
+    std::fs::write(&host, host_pressure_line("1.00", 5000)).unwrap();
+    std::fs::write(&own, pressure_line(1000)).unwrap();
+    // The run, then the host file becomes a FIFO whose writer waits 3 s, stalls
+    // this cgroup 1 s meanwhile, then gives the host's line.
+    let body = format!(
+        "sleep {SHARE_RUN_S}\nrm -f '{h}'\nmkfifo '{h}'\n\
+         (sleep 3; printf '%s' '{own_line}' > '{o}'; printf '%s' '{host_line}' > '{h}') >/dev/null 2>&1 &\n\
+         exit 0",
+        h = host.display(),
+        o = own.display(),
+        own_line = pressure_line(1000 + 1_000_000),
+        host_line = host_pressure_line("1.00", 5000),
+    );
+    let (code, text) = PerfBoundsRun::spawn(
+        dir.path(),
+        &body,
+        &[
+            ("CDO_SPEED_HOST_PRESSURE_FILE", host.as_os_str()),
+            ("CI_STEPS_CPU_PRESSURE_FILE", own.as_os_str()),
+        ],
+    )
+    .finish(60);
+    assert_eq!(code, Some(0), "{text}");
+    assert!(!text.contains("UNDER LOAD"), "{text}");
+    assert!(
+        text.contains("(this cgroup's CPU stall share was ")
+            && text.contains("the host's CPU stall share not available: its readings took "),
+        "{text}"
+    );
+}
+
+/// ⟨TLS-149⟩ With no awake clock (awake-clock falls back to wall time: here
+/// host-suspended cannot read its file), nothing is called an awake share, and
+/// the wait says it counts wall time, its timeout too (review r2, sol).
+#[cfg(target_os = "linux")]
+#[test]
+fn perf_bounds_says_when_the_awake_clock_fails() {
+    let dir = tempfile::tempdir().unwrap();
+    let host = dir.path().join("host.pressure");
+    std::fs::write(&host, host_pressure_line("40.00", 5000)).unwrap();
+    let (code, text) = PerfBoundsRun::spawn(
+        dir.path(),
+        "exit 3",
+        &[
+            ("CDO_SPEED_HOST_PRESSURE_FILE", host.as_os_str()),
+            ("CDO_SPEED_CALM_WAIT_S", "0.5".as_ref()),
+            ("CDO_SPEED_CALM_POLL_S", "0.1".as_ref()),
+            (
+                "CDO_HOST_SUSPENDED_FILE",
+                dir.path().join("no-such-file").as_os_str(),
+            ),
+        ],
+    )
+    .finish(60);
+    assert_eq!(code, Some(3), "{text}");
+    assert!(
+        text.contains("the awake clock cannot be read: this wait counts wall time")
+            && text.contains("(wall time: no awake clock): running anyway, UNDER LOAD"),
+        "{text}"
+    );
+    assert!(
+        text.contains(
+            "exit 3; UNDER LOAD: CPU stall shares not available: the awake clock could not be read (wall time only)"
+        ) && text.contains("before the run (wall time: no awake clock)")
+            && !text.contains("CPU stall share was"),
+        "{text}"
+    );
+}
+
+/// ⟨TLS-149⟩ The wait's knobs are finite decimal seconds, read in base 10 (`08`
+/// is eight, never a bash octal error); anything else is refused before the
+/// slot is taken (review r1, sol).
+#[cfg(target_os = "linux")]
+#[test]
+fn perf_bounds_checks_its_wait_knobs() {
+    let dir = tempfile::tempdir().unwrap();
+    let host = dir.path().join("host.pressure");
+    std::fs::write(&host, host_pressure_line("3.00", 0)).unwrap();
+    let (code, text) = perf_bounds_step(
+        dir.path(),
+        "true",
+        &[
+            ("CDO_SPEED_HOST_PRESSURE_FILE", host.as_os_str()),
+            ("CDO_SPEED_CALM_WAIT_S", "08".as_ref()),
+            ("CDO_SPEED_CALM_POLL_S", "09.5".as_ref()),
+        ],
+    );
+    assert_eq!(code, Some(0), "{text}");
+    assert!(
+        text.contains("host CPU pressure 3.00 % (avg60): calm") && !text.contains("base"),
+        "{text}"
+    );
+    for (var, bad) in [
+        ("CDO_SPEED_CALM_WAIT_S", "inf"),
+        ("CDO_SPEED_CALM_WAIT_S", "1e3"),
+        ("CDO_SPEED_CALM_POLL_S", "0"),
+        ("CDO_SPEED_CALM_POLL_S", "-1"),
+    ] {
+        let (code, text) =
+            perf_bounds_step(dir.path(), "echo stand-in ran", &[(var, bad.as_ref())]);
+        assert_eq!(code, Some(1), "{var}={bad}: {text}");
+        assert!(text.contains("must be finite decimal seconds"), "{text}");
+        assert!(
+            !text.contains("taken by perf-bounds") && !text.contains("stand-in ran"),
+            "{var}={bad}: {text}"
+        );
+    }
+}
+
+/// ⟨TLS-149⟩ perf-bounds waits and labels with cdo-speed's limits (TLS-76), not
+/// its own: the threshold and the wait and poll defaults are the same values.
+#[test]
+fn perf_bounds_shares_cdo_speeds_calm_limits() {
+    let read = |f: &str| {
+        std::fs::read_to_string(format!("{}/scripts/{f}", env!("CARGO_MANIFEST_DIR"))).unwrap()
+    };
+    let (speed, steps) = (read("cdo-speed"), read("ci-steps"));
+    let default = |var: &str| {
+        let key = format!("os.environ.get(\"{var}\", \"");
+        let rest = &speed[speed
+            .find(&key)
+            .unwrap_or_else(|| panic!("cdo-speed: {key}"))
+            + key.len()..];
+        rest[..rest.find('"').unwrap()].to_string()
+    };
+    for (var, ours) in [
+        (
+            "CDO_SPEED_CALM_PRESSURE",
+            "\nPERF_BOUNDS_LOADED_SHARE=".to_string(),
+        ),
+        (
+            "CDO_SPEED_CALM_WAIT_S",
+            "${CDO_SPEED_CALM_WAIT_S:-".to_string(),
+        ),
+        (
+            "CDO_SPEED_CALM_POLL_S",
+            "${CDO_SPEED_CALM_POLL_S:-".to_string(),
+        ),
+    ] {
+        let want = format!("{ours}{}", default(var));
+        let end = if ours.starts_with('\n') { "\n" } else { "}" };
+        assert!(
+            steps.contains(&format!("{want}{end}")),
+            "ci-steps lacks {want:?}{end:?} (cdo-speed's {var} default)"
+        );
+    }
 }
 
 /// ⟨TLS-108⟩ The parked skip cannot hide a real build (review r2, sol and Fable):
