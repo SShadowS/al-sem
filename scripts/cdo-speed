@@ -87,8 +87,10 @@ Clock and cycles per instruction (TLS-111, docs/superpowers/notes/2026-11-21-tls
 cpu-seconds-on-server1.md). On server1 CPU seconds measure the work times the clock,
 core sharing and core kind, each able to move x2 between the sides of a pass. So
 each call also counts user-mode cycles beside the instructions (per PMU; both fixed
-counters, nothing else is allowed on a PMU, and a PMU whose events did not run
-exactly as long, a sign of multiplexing, gives no count: see `perf_counts`) and
+counters, nothing else is allowed on a PMU; a PMU's two are one pinned perf group, so
+they run exactly as long and are never time-sliced, and a PMU whose events did not, a
+pinned group that got no counters, or a count whose running time does not cover the
+call's CPU seconds, gives no count: see `perf_event_args`, `perf_parse`, `covers`) and
 records user and system seconds apart. Per
 side: the clock (user cycles / user seconds, GHz) and cycles per instruction. A judged
 row whose sides' clocks differ beyond CLOCK_BAND is labelled CLOCK, one whose cycles
@@ -103,9 +105,13 @@ sys) / base CPU with clock ratio head/base, within the CPU limit, and in
 a rounds row for every round over the limit by itself. It is printed with its CPU ratio,
 the clock-corrected ratio and the instruction ratio. A clock in head's favour never
 waives; wall and memory failures always fail. A count whose counters did not run for
-the call's CPU seconds (`covers`) is recorded (`covered: false`) but gives no clock, no
-label and so no advisory. The advisory applies only in the final judgment, after any
-extra pair.
+the call's CPU seconds (`covers`) is recorded (`covered: false`, its counts kept) but
+gives no instruction count (TLS-130), no clock, no label and so no advisory. A count
+that may be partial (a PMU `<not counted>`, or a kind's running % under 100 summed
+over the PMUs: `partial_count`) gives no advisory either, in any pass of a warm-up row
+and in any round of a rounds row that is over the limit; the CLOCK condition is taken
+from the whole samples only. Such a CPU failure stays a failure and says why (TLS-130
+reviews r2-r4). The advisory applies only in the final judgment, after any extra pair.
 A judged warm-up row that FAILS (advisory or not) while its two passes' ratios differ
 beyond CONTRADICTED_SPREAD gets ONE more flipped pair (passes 3 and 4 on fresh servers,
 each side order once more; each waits for a calm host as passes 1 and 2 do). Then every
@@ -409,7 +415,20 @@ def clock_cpi_flags(rows):
 #   while the corrected CPU reads x1.18 and would waive;
 # - for a rounds row, every round whose CPU ratio is over the limit meets the
 #   instruction, wall and clock-corrected conditions by itself (medians taken
-#   from different rounds may not combine; review r3, S2).
+#   from different rounds may not combine; review r3, S2);
+# - (TLS-130 reviews r1 and r2, sol and Fable) every paired count of the row,
+#   on both sides, is whole and covers its call (`judge`'s `partial_rounds`:
+#   `partial_count` finds no `<not counted>` PMU and each kind's running % summed
+#   to at least 100; `covers`; a rounds row checks the rounds it judges). A count
+#   that may be partial can move the instruction ratio, the clock and the CLOCK
+#   label by an amount no rule here can bound (the lost time need not have run
+#   at the call's average rate), so such a row keeps its CPU failure as
+#   measured and says why (`row["partial"]`); the CLOCK condition comes from
+#   the whole samples only (review r4, sol). Real multi-threaded calls sum their
+#   running % to 110-125, so the running-% rule binds only on a call on one
+#   core type (review r3, Fable). Open task TLS-143: probe with real perf, and
+#   fix, a loss inside a counted row under the coverage band (the
+#   inherited-thread shape, see `covers`).
 # Wall and memory failures always fail. The advisory applies only in the final
 # judgment: a contradicted failure gets the extra pair first (`warm_failures`
 # ignores the advisory).
@@ -422,19 +441,38 @@ def cpu_advisory(row):
     warm = row.get("warm", False)
     cpu_limit = WARM_CPU_LIMIT if warm else CPU_LIMIT
     wall_limit = WARM_WALL_LIMIT if warm else WALL_LIMIT
-    if not (i and c and k and "clock" in row_labels(row)) or row["wall"]["ratio"] > wall_limit:
+    if not (i and c and k) or row["wall"]["ratio"] > wall_limit:
         return None
-    # (CPU, instructions, CPU at equal clocks, wall, clock) ratios: the warm-up
-    # row's judged (geometric mean) ratios, or each over-limit round of a rounds row.
+    # ⟨TLS-130 reviews r2 and r3⟩ A count `judge` takes as partial or not
+    # covering (`partial_rounds`) gives no advisory, in every pass a warm-up
+    # row's mean takes and in every round a rounds row judges (over the limit).
+    partial = row.get("partial_rounds") or [row.get("partial")] * len(row["cpu"]["ratios"])
+    if warm and any(partial):
+        return None
+    # ⟨TLS-130 review r4, sol⟩ The CLOCK condition from whole samples only: the
+    # displayed label (`row_labels`) takes the median over every round, so a
+    # partial round under the limit could supply it. sol's case: clocks x0.860,
+    # x0.865 (round 2, partial), x0.890 read a median x0.865 (CLOCK); the two
+    # whole rounds' median x0.875 is inside the band. The other count-derived
+    # values the waiver reads are per sample below (each a whole one), or the
+    # warm-up's means (every pass whole, above).
+    whole = [cr for cr, p in zip(c["ratios"], partial) if not p]
+    clock = c["ratio"] if warm else (statistics.median(whole) if whole else None)
+    if not clock or max(clock, 1 / clock) <= CLOCK_BAND:
+        return None
+    # (CPU, instructions, CPU at equal clocks, wall, clock, partial) per sample:
+    # the warm-up row's judged (geometric mean) ratios, or each over-limit round
+    # of a rounds row.
     if warm:
         samples = [(row["cpu"]["ratio"], i["ratio"], k["ratio"], row["wall"]["ratio"],
-                    c["ratio"])]
+                    c["ratio"], "; ".join(p for p in partial if p))]
     else:
         samples = [s for s in zip(row["cpu"]["ratios"], i["ratios"], k["ratios"],
-                                  row["wall"]["ratios"], c["ratios"]) if s[0] > cpu_limit]
-    for cpu, ir, corrected, w, cr in samples:
-        if not (1 / INSTR_LIMIT <= ir <= INSTR_LIMIT and w <= wall_limit
-                and corrected <= cpu_limit and cr < 1):
+                                  row["wall"]["ratios"], c["ratios"], partial)
+                   if s[0] > cpu_limit]
+    for cpu, ir, corrected, w, cr, part in samples:
+        if part or not (1 / INSTR_LIMIT <= ir <= INSTR_LIMIT and w <= wall_limit
+                        and corrected <= cpu_limit and cr < 1):
             return None
     corrected = k["ratio"]
     return (f"{row['call']}: CPU time x{row['cpu']['ratio']:.2f}, x{corrected:.2f} at equal "
@@ -1074,13 +1112,33 @@ def perf_event_args(events=None):
     plain), at most one `instructions` and one `cycles` event and nothing else.
     Both are fixed counters, so this perf run leaves nothing to multiplex: a
     count never comes out short because of our own events (review r1, sol;
-    TLS-111 added cycles). Any other event, or one twice, is refused here."""
+    TLS-111 added cycles). Any other event, or one twice, is refused here.
+    ⟨TLS-130⟩ A PMU's events go in one group (`-e {a,b}`): the kernel schedules a
+    group's members together, so they run exactly as long. Apart, perf enables
+    and reads them one after another, so a server thread running at the start
+    or the stop of the count (more so under load) gives one of them more running
+    time than the other, either one: on server1 (perf 7.0.14, 2026-11-25, 12
+    spinning processes attached, no other perf user;
+    /work/.al-sem/tools-notes/tls130/skew_probe.py, probe-2026-11-25.log) apart
+    unequal in 10 of 10 stops (14 us to 9.2 ms), grouped 0 of 10; a gate under
+    load refused counts that were whole.
+    ⟨TLS-130 review r1⟩ Each group is PINNED (`:D`), which a group needs: its two
+    members always tie, so time-slicing would not show in `perf_parse`. A pinned
+    group is never time-sliced: it holds its counters whenever its tasks run, or
+    it fails outright (another pinned user holds the counters) and counts
+    nothing on that PMU. Measured (probe-pinned-2026-11-25.log): 16 ordinary
+    extra cpu_core events, spinners on the P-cores: pinned 100.00 % running in 3
+    of 3 stops, unpinned 49-50 %; attached (-p) beside a competing pinned group,
+    ours read `<not counted>` at 0 ns and 100.00 % (enabled 0), which
+    `perf_parse` refuses. What stays: see `covers`."""
     events = events or INSTR_EVENTS
     pairs = [(event_pmu(e), event_kind(e)) for e in events]
     if len(pairs) != len(set(pairs)) or any(k not in FIXED_KINDS for _, k in pairs):
         raise ValueError("cdo-speed: per PMU only `instructions` and `cycles`, once each "
                          f"(fixed counters, no multiplexing): {events}")
-    return [a for e in events for a in ("-e", e)]
+    pmus = dict.fromkeys(p for p, _ in pairs)
+    return [a for pmu in pmus
+            for a in ("-e", "{" + ",".join(e for e in events if event_pmu(e) == pmu) + "}:D")]
 
 
 def perf_counts(text, events=None):
@@ -1090,8 +1148,8 @@ def perf_counts(text, events=None):
 
 
 def perf_parse(text, events=None):
-    """({event: count}, {event: running ns}) from `perf stat -x,` output for
-    `events`, or None. An event
+    """({event: count}, {event: running ns}, {event: running %}) from `perf
+    stat -x,` output for `events`, or None. An event
     that never ran (a call that stayed on one core type) reads `<not counted>`:
     0. Any other non-number (`<not supported>`), or an event missing, is None.
     ⟨TLS-111⟩ Multiplexing is checked on the running time (perf's 4th column,
@@ -1102,15 +1160,20 @@ def perf_parse(text, events=None):
     241.0 ms. The running-% column (5th) is no check: it is running over a
     per-PMU enabled time, truncated to a whole percent, and the PMUs' shares of
     one kind summed to 110-125 % on real calls (and to 99 % on `true`), so a sum
-    rule refused 9 of 64 calls in an A/A run on CDO. Not caught: a PMU whose
-    events lose exactly the same time (they are scheduled one by one, so an
-    exact tie is not expected; the call's coverage, `covers`, is the check for
-    that). A `<not counted>` row runs 0 ns beside its sibling's 0; one at a
+    rule refused 9 of 64 calls in an A/A run on CDO (it now only withholds the
+    CPU advisory, `partial_count`). Not caught here: a PMU whose events lose
+    the same time (since TLS-130 they are one pinned group, which never
+    time-slices; a group that fails reads `<not counted>`, see `partial_count`;
+    the call's coverage, `covers`, is the other check). A `<not counted>` row runs 0 ns beside its sibling's 0; one at a
     non-zero running time, or a positive count at 0 ns, is no count (a count of
     0 at a non-zero time is real: `true` on an E-core for 0.17 ms). An event's
-    row given twice is no count."""
+    row given twice is no count.
+    ⟨TLS-130 review r1⟩ A `<not counted>` row must read 0.00 % running: a PMU the
+    tasks never ran on was enabled for their time and ran 0 ns (0.00 %, on
+    server1 and on real CDO calls). A pinned group that never got its counters
+    has no enabled time either, and perf prints it at 100.00 %: no count."""
     events = events or INSTR_EVENTS
-    counts, running = {}, {}
+    counts, running, share = {}, {}, {}
     for line in text.splitlines():
         cols = line.strip().split(",")
         if len(cols) > 4 and cols[2] in events:
@@ -1125,8 +1188,12 @@ def perf_parse(text, events=None):
             if not cols[3].isdigit():
                 return None
             running[cols[2]] = int(cols[3])
+            try:
+                share[cols[2]] = float(cols[4])
+            except ValueError:
+                return None
             not_counted = cols[0] == "<not counted>"
-            if (not_counted and running[cols[2]] > 0) or (
+            if (not_counted and (running[cols[2]] > 0 or cols[4] != "0.00")) or (
                     counts[cols[2]] > 0 and running[cols[2]] == 0):
                 return None
     if set(counts) != set(events):
@@ -1134,7 +1201,32 @@ def perf_parse(text, events=None):
     for pmu in {event_pmu(e) for e in events}:
         if len({running[e] for e in events if event_pmu(e) == pmu}) != 1:
             return None
-    return counts, running
+    return counts, running, share
+
+
+def partial_count(parsed):
+    """⟨TLS-130 review r2⟩ Why a parsed count (`perf_parse`) may be partial, or
+    None when it is whole. Partial: a PMU's events read `<not counted>` (0 ns),
+    or a kind's running % summed over the PMUs is under 100 (review r3, sol:
+    no allowance). perf truncates each PMU's % to a whole number, so a whole
+    count can read 99: `true` on server1 read 93.00 + 6.00 for 93.7 + 6.3
+    (perf 7.0.14, 2026-11-21). Such a count is taken as partial too: that
+    only withholds a CPU advisory, never hides a failure, while an allowance
+    let a really partial 80 + 19 count waive one. A pinned group that fails after its
+    tasks ran on that PMU reads exactly like a PMU they never ran on, so a
+    `<not counted>` PMU is always taken as partial. A partial count still gives
+    an instruction count (an advisory ratio), but never a CPU advisory
+    (`cpu_advisory`). Two sides whose counted PMUs differ are covered too: one
+    of them has a `<not counted>` PMU."""
+    counts, running, share = parsed
+    lost = sorted({event_pmu(e) for e in counts if running[e] == 0})
+    if lost:
+        return f"{', '.join(p or 'cpu' for p in lost)} not counted"
+    for kind in FIXED_KINDS:
+        total = sum(s for e, s in share.items() if event_kind(e) == kind)
+        if total < 100:
+            return f"{kind} ran {total:.2f} % of the time summed over the PMUs"
+    return None
 
 
 def kind_total(counts, kind):
@@ -1230,7 +1322,10 @@ class Server:
         `self.last_instr` then holds the call's user-mode instructions, or None
         when they are not counted (TLS-83); `self.last_counts` every counted
         event's count ({event: n}, or None), and `self.last_user_sys` its user
-        and system seconds (TLS-111)."""
+        and system seconds (TLS-111). `self.last_refusal` says why a counting
+        run gave this call no count, else None (TLS-130 review r1: `timed_call`
+        puts it in the call's record, so a reader ties it to that call)."""
+        self.last_refusal = None
         perf = self.instr_start()
         # instr_stop runs even when the call times out (SystemExit): perf and
         # its FIFOs never outlive the call (review r1, sol).
@@ -1253,6 +1348,13 @@ class Server:
             # ⟨TLS-111⟩ The instructions events' running time over the PMUs:
             # the counters' coverage of the call (`covers`).
             self.last_running_s = parsed and kind_total(parsed[1], "instructions") / 1e9
+            # ⟨TLS-130 review r2⟩ Why the count may be partial (no CPU advisory).
+            self.last_partial = parsed and partial_count(parsed)
+            # ⟨TLS-130 review r4, Fable⟩ Each kind's running % summed over the
+            # PMUs, kept in the record: how often the under-100 rule withholds.
+            self.last_running_pct = parsed and {
+                kind: sum(s for e, s in parsed[2].items() if event_kind(e) == kind)
+                for kind in FIXED_KINDS}
         self.sample_hwm()
         if "error" in r:
             raise SystemExit(f"cdo-speed: {self.name}: {tool}: {r['error']}")
@@ -1278,15 +1380,21 @@ class Server:
         # After INSTR_GIVE_UP attaches in a row fail, this server counts no more:
         # each failure costs up to INSTR_ATTACH_S inside the CDO slot, 66 calls a
         # run (review r1, sol).
-        if not INSTR_EVENTS or getattr(self, "instr_failures", 0) >= INSTR_GIVE_UP:
+        if not INSTR_EVENTS:
+            return None
+        if getattr(self, "instr_failures", 0) >= INSTR_GIVE_UP:
+            # No line per call: the server-level line below said it once.
+            self.last_refusal = "this server's perf gave up"
             return None
         started = self._instr_start()
         self.instr_failures = 0 if started else getattr(self, "instr_failures", 0) + 1
         if not started:
+            cause = getattr(self, "attach_error", "")
+            self.last_refusal = f"perf attach failed: {cause}"
             # One line per failed attach (at most INSTR_GIVE_UP a server): what the
             # tests count, since a stub perf too slow to start logs nothing (TLS-103).
             print(f"cdo-speed: {self.name} (pid {self.p.pid}): perf attach failed "
-                  f"({self.instr_failures}/{INSTR_GIVE_UP})", file=sys.stderr)
+                  f"({self.instr_failures}/{INSTR_GIVE_UP}): {cause}", file=sys.stderr)
         if self.instr_failures == INSTR_GIVE_UP:
             print(f"cdo-speed: {self.name}: perf failed to attach {INSTR_GIVE_UP} times in a row; "
                   "this server's calls are not counted from here on", file=sys.stderr)
@@ -1322,8 +1430,11 @@ class Server:
                 try:
                     ctl_fd = os.open(ctl, os.O_WRONLY | os.O_NONBLOCK)
                 except OSError:  # ENXIO: no reader yet
-                    if time.monotonic() > deadline or perf.poll() is not None:
-                        raise
+                    # A named cause, not ENXIO's text (TLS-130 review r3, Fable).
+                    if perf.poll() is not None:
+                        raise OSError("perf ended before opening its control FIFO")
+                    if time.monotonic() > deadline:
+                        raise OSError("perf did not open its control FIFO in time")
                     time.sleep(0.005)
             os.write(ctl_fd, b"enable\n")
             got = b""
@@ -1340,7 +1451,11 @@ class Server:
             # call's count would be partial (review r1, sol).
             if set(descendants(self.p.pid)) - set(attached):
                 raise OSError("a server process started before perf attached")
-        except OSError:
+        except OSError as e:
+            # ⟨TLS-130 review r2, Fable⟩ The cause, for the call's reason: no
+            # ack, perf ending first, a server process started first, or the
+            # OS error itself.
+            self.attach_error = str(e) or type(e).__name__
             for fd in (ctl_fd, ack_fd):
                 if fd is not None:
                     os.close(fd)
@@ -1378,11 +1493,15 @@ class Server:
             # server counts no more (review r2, sol; an ack resets the attach
             # streak, so the attach give-up alone did not catch it).
             self.instr_failures = INSTR_GIVE_UP
+            self.last_refusal = "perf did not stop"
             print(f"cdo-speed: {self.name}: perf did not stop within {INSTR_STOP_S:g} s; "
                   "this server's calls are not counted from here on", file=sys.stderr)
         else:
             if early:
                 total = None
+                self.last_refusal = "perf ended before the call did"
+                print(f"cdo-speed: {self.name}: perf ended before the call did; call not counted",
+                      file=sys.stderr)
             else:
                 try:
                     with open(out) as f:
@@ -1393,16 +1512,25 @@ class Server:
                         # row): perf's own rows, for the log.
                         rows = [ln.strip() for ln in text.splitlines()
                                 if ln.strip() and not ln.startswith("#")]
+                        self.last_refusal = "perf output not taken as a count"
                         print(f"cdo-speed: {self.name}: perf output not taken as a count: "
                               f"{' | '.join(rows[:6]) or '(empty)'}", file=sys.stderr)
-                except OSError:
+                except OSError as e:
                     total = None
+                    self.last_refusal = "perf output unreadable"
+                    print(f"cdo-speed: {self.name}: perf output unreadable ({e}); "
+                          "call not counted", file=sys.stderr)
         for fd in fds:
             os.close(fd)
         shutil.rmtree(os.path.dirname(out), ignore_errors=True)
         # No instruction at all (every event `<not counted>`) is no count: as a 0
         # it would pull the round total down (review r1, Fable).
-        return total if total and kind_total(total[0], "instructions") else None
+        if total and not kind_total(total[0], "instructions"):
+            print(f"cdo-speed: {self.name}: perf counted no instruction; call not counted",
+                  file=sys.stderr)
+            self.last_refusal = "perf counted no instruction"
+            total = None
+        return total
 
     def sample_hwm(self):
         """Read the VmHWM of the server and every live child. Called after each
@@ -1505,11 +1633,25 @@ def timed_call(server, side, cid, tool, args, rnd, warm_pass, tag, records):
         f"  load {load:5.1f}  pressure {shown:>5}{instr_note}{exit_note}")
     if code != 0:
         raise CallFailed(f"{tag} {cid} ({tool}) on {side} exited {code}", err)
+    # ⟨TLS-130⟩ An uncovered count is partial (a multiplexed group loses the same
+    # time on both members, so only `covers` sees it): no instruction count; its
+    # counts stay for diagnostics.
+    # ⟨TLS-130 review r1⟩ `uncounted`: why this call has no count (None when it
+    # has one, or when the run counts nothing), tied to its own record.
+    refusal = getattr(server, "last_refusal", None)
+    if covered is False:
+        instr = None
+        refusal = "not covered"
+    # ⟨TLS-130 review r2⟩ `partial`: why this call's count may be partial
+    # (`partial_count`); such a call never makes a CPU failure advisory.
+    partial = getattr(server, "last_partial", None) if instr else None
     records.append(dict(call=cid, side=side, round=rnd, warm_pass=warm_pass,
                         wall=wall, cpu=cpu, sha=sha, load=load, pressure=pressure,
                         instr=instr, suspended_before=before, suspended_during=during,
                         user=user, sys=system, cycles=cycles, counts=counts,
-                        running_s=running_s, covered=covered,
+                        running_s=running_s, covered=covered, uncounted=refusal,
+                        partial=partial,
+                        running_pct=getattr(server, "last_running_pct", None),
                         **clock_cpi(cycles, user, instr, covered)))
 
 
@@ -1532,12 +1674,29 @@ def timed_call(server, side, cid, tool, args, rnd, warm_pass, tag, records):
 #   against perf's exact times on many threads: a guess, not a measured cause. A
 #   two-sided 2 % band refused all 8 of those calls.
 # The one-sided band's cost: on a multi-threaded call that reads about +2.5 %, a
-# real coverage loss of up to about 4.7 % still passes. That moves its clock by
-# under 5 %, against the 15 % CLOCK band, so it cannot flip an advisory alone.
+# real coverage loss of up to about 4.7 % still passes. Near the limits that can
+# flip an advisory (TLS-130 review r1, sol), so a CPU advisory also needs both
+# sides' counts whole (`partial_count`).
 # A running time above CPU x COVER_CAP + COVER_ABS is no loss but is odd (perf
 # counting something /proc does not): no count either. The cap is x1.10, about
-# four times the largest excess seen on CDO. An uncovered count only loses its
-# clock, label and advisory.
+# four times the largest excess seen on CDO. An uncovered count gives no
+# instruction count (TLS-130), so no clock, label or advisory; its counts stay
+# in the record.
+# ⟨TLS-130⟩ The one partial count left: a pinned group (`perf_event_args`) is
+# never time-sliced, and one that never got its counters is refused by
+# `perf_parse` (100.00 %). One that fails AFTER its tasks first ran on that PMU
+# reads like a PMU they never ran on (`<not counted>`, 0 ns, 0.00 %): perf's CSV
+# has no enabled time to tell them apart, and perf -v's enabled times differ
+# between the PMUs even when nothing fails (1.93 s against 1.29 s on a process
+# starting threads and children; enabled_probe.py). Coverage misses it when
+# that PMU carried less of the call's CPU seconds than this band (2 % + 0.05
+# s): the count then stays an instruction count, but `partial_count` takes
+# every `<not counted>` PMU as partial, so it never gives a CPU advisory.
+# A second shape, not reproduced (it needs a CPU-wide pinned rival): a thread or
+# child started during the call (inherited) whose pinned group fails while the
+# parent's holds is expected to read as a normal row with a shorter running
+# time, not `<not counted>`; again only coverage catches it, same band. A loss
+# under the band: open task TLS-143 (probe it with real perf, then fix it).
 COVER_REL = 0.02
 COVER_ABS = 0.05
 COVER_CAP = 1.10
@@ -1604,6 +1763,9 @@ def judge(records):
                                 wall=sum(r["wall"] for r in rs),
                                 cpu=sum(r["cpu"] for r in rs), sha="",
                                 instr=instr, cycles=cycles, user=user, sys=summed("sys"),
+                                running_s=summed("running_s"),
+                                partial="; ".join(f"{r['call']}: {r['partial']}" for r in rs
+                                                  if r.get("partial")) or None,
                                 covered=covered, **clock_cpi(cycles, user, instr, covered)))
     calls.append("round-total")
     for cid in calls:
@@ -1633,6 +1795,25 @@ def judge(records):
             ratios = [(b[k]["user"] * b[k]["clock"] / a[k]["clock"] + b[k]["sys"])
                       / (a[k]["user"] + a[k]["sys"]) for k in paired]
             row["corrected"] = dict(ratio=statistics.median(ratios), ratios=ratios)
+        # ⟨TLS-130 reviews r2 and r3⟩ Why a paired count may be partial, per pair
+        # (`partial_rounds`, in `paired` order; `cpu_advisory` reads only the
+        # pairs it judges): `partial_count`'s reason, or a count not shown to
+        # cover its call (`covers`; a counted call always covers, so this
+        # restates `timed_call`'s rule where `cpu_advisory` reads it). The row
+        # then gets no CPU advisory, and its failure says why.
+        def why(r):
+            if r.get("partial"):
+                return r["partial"]
+            # No count at all: no reason here (the row has no instruction
+            # ratio, so no advisory anyway; review r4, Fable).
+            if r.get("instr") is None:
+                return None
+            return None if r.get("covered") else "count not shown to cover the call"
+        row["partial_rounds"] = ["; ".join(f"{side} {r['call']} r{k}: {why(r)}"
+                                           for side, r in (("base", a[k]), ("head", b[k]))
+                                           if why(r)) or None
+                                 for k in paired]
+        row["partial"] = "; ".join(p for p in row["partial_rounds"] if p) or None
         row["judged"] = row["cpu"]["base"] >= MIN_SECONDS
         rows.append(row)
         # Undecided: the rounds disagree about the verdict (some ratios over
@@ -1953,6 +2134,11 @@ def main():
 
     def cpu_fails(row, text):
         advisory = cpu_advisory(row)
+        if (not advisory and row.get("partial")
+                and cpu_advisory(dict(row, partial=None, partial_rounds=None))):
+            # ⟨TLS-130 reviews r2 and r3⟩ Said only when the partial count is
+            # what withheld an advisory the row would otherwise get.
+            text += f" (no CPU advisory: a count may be partial: {row['partial']})"
         (cpu_advisories if advisory else failed).append(advisory or text)
     log(f"verdict, head/base (limits: rounds cpu {CPU_LIMIT} and wall {WALL_LIMIT} on the "
         f"median ratio, warm-up cpu {WARM_CPU_LIMIT} and wall {WARM_WALL_LIMIT}, memory "

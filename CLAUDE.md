@@ -249,7 +249,12 @@ Every test still runs before a merge; the tiers decide HOW OFTEN each one runs.
   judged row whose sides' clocks (user cycles / user s) or cycles per instruction differ beyond
   x1.15 (provisional bands) is labelled `CLOCK` or `CPI`, from counts that cover the call
   (counter running time not short of its /proc CPU by over 2 % + 0.05 s, nor over x1.10 of it;
-  else `covered: false`, no label).
+  else `covered: false`: no label and, since TLS-130, no instruction count either; the counts
+  stay in `speed.json`). A PMU's two events are one pinned perf group (`{...}:D`, TLS-130):
+  they always run equally long and are never time-sliced; a group that gets no counters
+  (another pinned perf user) reads `<not counted>` at 100.00 % and is refused. A pinned group
+  that fails after its tasks ran there reads like a PMU never run on: kept as an instruction
+  count unless coverage drops it, but partial (below).
   A warm-up failure whose two passes disagree beyond x1.25 gets ONE more flipped pair first
   (two passes, each waiting for a calm host); every row that failed after pass 2 must then
   agree within each side order, and four passes judge; else `HOST UNSTABLE`, exit 2 (`verdict`
@@ -257,7 +262,12 @@ Every test still runs before a merge; the tiers decide HOW OFTEN each one runs.
   (q-20261121T025802-abcd2da8, narrowed in review r3): the one advisory CPU failure is a
   covered, CPU-only failure with equal instructions (x1.02) that head's LOWER clock explains
   (head user x clock ratio + head sys, over base CPU, within the limit, per pass or round; in
-  the rounds, each over-limit round by itself).
+  the rounds, each over-limit round by itself), and only when every paired count it judges, on
+  both sides, is whole and covers its call (TLS-130 reviews r2-r3: no PMU `<not counted>`, each
+  kind's running % summed over the PMUs at least 100, no truncation allowance). A partial count
+  keeps its CPU failure a failure, saying why; the CLOCK condition comes from whole samples
+  only. Open task TLS-143: probe and fix a loss inside a counted row under the coverage band
+  (multi-threaded calls sum their running % to 110-125, so the % rule does not see it).
   A `CPI` label never waives: more cycles per instruction is a memory-stall regression's shape.
   **It is Linux only (it reads `/proc`):
   on the Windows machine every full `cdo-gate` run FAILS unless given `--no-speed`**

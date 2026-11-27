@@ -2388,6 +2388,11 @@ for line in sys.stdin:
         uncover = head and str(calls) == os.environ.get("STUB_UNCOVER_CALL")
         with open(os.path.join(os.environ["STUB_DIR"], f"cover.{os.getpid()}"), "w") as f:
             f.write("0.5" if uncover else "1")
+        # TLS-130 review r3: STUB_PARTIAL_CALL=N: the stub perf prints head's
+        # N-th call (per server) with its running % summed to 90 (counts whole).
+        partial = head and str(calls) == os.environ.get("STUB_PARTIAL_CALL")
+        with open(os.path.join(os.environ["STUB_DIR"], f"partial.{os.getpid()}"), "w") as f:
+            f.write("1" if partial else "")
         # STUB_SLEEP_S: both sides' judged calls wait this long (wall time only),
         # so a wall ratio stays steady when load stretches the short CPU burn.
         if calls in (1, 6):
@@ -2452,7 +2457,7 @@ if os.path.exists(me):
 /// probe, so starting it for a call fails. STUB_PERF_NOACK: it never answers
 /// `ack`.
 const SPEED_PERF_STUB: &str = r#"#!/usr/bin/env python3
-import os, signal, sys, time
+import json, os, signal, sys, time
 a = sys.argv[1:]
 def total(pids, kind="instr"):
     s = 0
@@ -2471,27 +2476,35 @@ def cpu_ns(pids):
         except (OSError, IndexError, ValueError):
             pass
     return s * 1e9 / os.sysconf("SC_CLK_TCK")
-def lines(n, c, run_ns=1e6):
+def lines(n, c, run_ns=1e6, partial=False):
     # TLS-111: instructions and cycles per PMU, with perf's running time (ns:
     # the attached tasks' CPU time while counted, split over the PMUs, equal for
     # a PMU's events when nothing multiplexes) and running % (as real perf on a
     # hybrid split: whole percents whose sum passes 100). Attached (not the
     # probe): STUB_PERF_SPLIT=<share> puts that share of each count on
     # cpu_atom; STUB_PERF_MUX: cpu_core's cycles ran 10 % shorter than its
-    # instructions (multiplexed).
+    # instructions (multiplexed); STUB_PERF_MUX_ATTACH=<n>: only on the run's
+    # n-th attach (TLS-130). A PMU never run on reads `<not counted>` at 0 ns
+    # and 0.00 %; STUB_PERF_PINNED_LOST: cpu_core's pinned group got no
+    # counters (another pinned user): `<not counted>` at 0 ns and 100.00 %, as
+    # the real perf prints it (TLS-130 review r1).
     probe = "--" in a
     if os.environ.get("STUB_PERF_NONE") and not probe:
         n = c = "<not counted>"
     split = 0.0 if probe else float(os.environ.get("STUB_PERF_SPLIT", "0"))
-    mux = not probe and os.environ.get("STUB_PERF_MUX")
+    mux = not probe and (os.environ.get("STUB_PERF_MUX")
+                         or os.environ.get("STUB_PERF_MUX_ATTACH") == str(attach_no))
     out = ""
     for pmu, share in (("cpu_core", 1 - split), ("cpu_atom", split)):
         for kind, v in (("instructions", n), ("cycles", c)):
-            nc = share == 0 or isinstance(v, str)
+            lost = not probe and os.environ.get("STUB_PERF_PINNED_LOST") and pmu == "cpu_core"
+            nc = share == 0 or isinstance(v, str) or lost
             val = "<not counted>" if nc else int(round(v * share))
             mux_f = 0.9 if mux and pmu == "cpu_core" and kind == "cycles" else 1
             ns = 0 if nc else int(run_ns * share * mux_f)
-            pct = 100 if share == 1 else int(120 * share)
+            pct = 100 if lost else 0 if nc else 100 if share == 1 else int(120 * share)
+            if partial and not nc:
+                pct = 90 if share == 1 else int(90 * share)  # summed: 90 (STUB_PARTIAL_CALL)
             out += f"{val},,{pmu}/{kind}/u,{ns},{pct:.2f},,\n"
     return out
 if "--" in a:
@@ -2503,6 +2516,12 @@ out = a[a.index("-o") + 1]
 pids = a[a.index("-p") + 1].split(",")
 with open(os.path.join(os.environ["STUB_DIR"], "perf-attaches"), "a") as f:
     f.write(pids[0] + "\n")  # the server's pid (cdo-speed lists it first)
+with open(os.path.join(os.environ["STUB_DIR"], "perf-attaches")) as f:
+    attach_no = len(f.read().splitlines())
+# Every attach's arguments, one JSON list a line (TLS-130 review r1: what
+# `Server._instr_start` really passes, `-e` included).
+with open(os.path.join(os.environ["STUB_DIR"], "perf-argv"), "a") as f:
+    f.write(json.dumps(a) + "\n")
 # This perf's pid, for the server's STUB_PERF_EARLY wait.
 with open(os.path.join(os.environ["STUB_DIR"], f"perfpid.{pids[0]}"), "w") as f:
     f.write(str(os.getpid()))
@@ -2527,7 +2546,11 @@ def stop(*_):
             cover = os.path.join(os.environ["STUB_DIR"], f"cover.{pids[0]}")
             if os.path.exists(cover):
                 ran *= float(open(cover).read() or "1")
-            f.write(lines(total(pids) - start, total(pids, "cycles") - cstart, max(ran, 1e6)))
+            # The server's STUB_PARTIAL_CALL mark for this call (TLS-130 r3).
+            mark = os.path.join(os.environ["STUB_DIR"], f"partial.{pids[0]}")
+            partial = os.path.exists(mark) and open(mark).read() == "1"
+            f.write(lines(total(pids) - start, total(pids, "cycles") - cstart, max(ran, 1e6),
+                          partial))
     sys.exit(0)
 # Installed before the `ack` (review r1, sol): a fast call may SIGINT us at once.
 # STUB_PERF_NOSTOP: SIGINT does nothing (a perf hanging at its stop).
@@ -3004,28 +3027,76 @@ fn speed_reports_instructions_and_their_limit_is_advisory() {
     );
 }
 
+/// Review r2 (sol): the preflight is cdo-speed's own probe (`instr_probe`), so
+/// it counts through the same pinned groups (`perf_event_args`) the attaches
+/// use. `perf`: the perf command to probe (CDO_SPEED_PERF), None for the real
+/// one. Err with the reason when it cannot count (review r4, sol: the reply is
+/// matched exactly; "cannot: ..." once read as "can").
+#[cfg(target_os = "linux")]
+fn speed_real_perf_probe(perf: Option<&std::path::Path>) -> Result<(), String> {
+    let probe = r#"
+import importlib.machinery, importlib.util, sys
+loader = importlib.machinery.SourceFileLoader("cdo_speed", sys.argv[1])
+m = importlib.util.module_from_spec(importlib.util.spec_from_loader("cdo_speed", loader))
+loader.exec_module(m)
+events, why = m.instr_probe()
+print("can" if events else f"cannot: {why}")
+"#;
+    let mut cmd = crate::clean_env::command("python3");
+    cmd.args(["-c", probe])
+        .arg(concat!(env!("CARGO_MANIFEST_DIR"), "/scripts/cdo-speed"))
+        .env("ALSEM_SPEED_CACHE", "/nonexistent/cdo-speed-cache");
+    if let Some(perf) = perf {
+        cmd.env("CDO_SPEED_PERF", perf);
+    }
+    let out = cmd.output().unwrap();
+    let said = String::from_utf8_lossy(&out.stdout).trim().to_string();
+    if out.status.success() && said == "can" {
+        Ok(())
+    } else {
+        Err(format!(
+            "{said}{}",
+            String::from_utf8_lossy(&out.stderr).trim()
+        ))
+    }
+}
+
+/// ⟨TLS-130 review r4, sol⟩ The real-perf preflight says no where perf cannot
+/// count: a perf that fails every run (exit 1, no output) gives Err with
+/// cdo-speed's reason, so `speed_counts_instructions_with_the_real_perf` skips
+/// instead of asserting counts.
+///
+/// Mutation (2026-11-26): the reply matched by prefix again
+/// (`said.starts_with("can")`) -> "a perf that cannot count passed the
+/// preflight" (red). Restored, green.
+#[cfg(target_os = "linux")]
+#[test]
+fn speed_real_perf_probe_says_when_perf_cannot_count() {
+    use std::os::unix::fs::PermissionsExt;
+    let bin = tempfile::tempdir().unwrap();
+    let perf = bin.path().join("perf");
+    std::fs::write(&perf, "#!/bin/sh\nexit 1\n").unwrap();
+    std::fs::set_permissions(&perf, std::fs::Permissions::from_mode(0o755)).unwrap();
+    let got = speed_real_perf_probe(Some(&perf));
+    assert!(
+        got.as_ref().is_err_and(|why| why.starts_with("cannot: ")),
+        "a perf that cannot count passed the preflight: {got:?}"
+    );
+}
+
 /// ⟨TLS-83⟩ The REAL perf counts the stub servers' calls: one binary twice, so
 /// every ratio is about 1 and no line says "not counted". This pins perf's
 /// actual output format (event names, `-x,` columns, `<not counted>`), which the
 /// stub perf only imitates. Skipped, saying so, where perf cannot count
-/// user-mode instructions (CI, a host whose perf sysctls reset).
+/// user-mode instructions (CI, a host whose perf sysctls reset;
+/// `speed_real_perf_probe`), and (review r4, sol) where every call's attach was
+/// refused for a stated reason: that is no regression, so the test skips with
+/// the reasons rather than failing.
 #[cfg(target_os = "linux")]
 #[test]
 fn speed_counts_instructions_with_the_real_perf() {
-    let can = crate::clean_env::command("perf")
-        .args(["stat", "-x,", "-e", "instructions:u", "--", "true"])
-        .output()
-        .map(|o| {
-            o.status.success()
-                && String::from_utf8_lossy(&o.stderr).lines().any(|l| {
-                    l.split(',')
-                        .next()
-                        .is_some_and(|n| n.parse::<u64>().is_ok())
-                })
-        })
-        .unwrap_or(false);
-    if !can {
-        eprintln!("skipped: perf cannot count user-mode instructions here");
+    if let Err(why) = speed_real_perf_probe(None) {
+        eprintln!("skipped: perf cannot count through cdo-speed's pinned groups here: {why}");
         return;
     }
     let dir = tempfile::tempdir().unwrap();
@@ -3036,45 +3107,470 @@ fn speed_counts_instructions_with_the_real_perf() {
         .rfind(|l| l.contains("cdo-speed: PASS"))
         .unwrap_or_else(|| panic!("{text}"))
         .to_string();
-    assert!(
-        v.contains("(instructions: build x") && v.contains("round-total x"),
-        "{text}"
-    );
     assert!(text.contains("instructions: counted per call"), "{text}");
-    // TLS-111: user cycles too, under the real perf's running-% columns (the
-    // unpinned stub servers move between core types, so a PMU's share alone is
-    // below 100 while the kind's sum is 100).
     let json: serde_json::Value = serde_json::from_str(
         &std::fs::read_to_string(dir.path().join("state-/out/speed.json")).unwrap(),
     )
     .unwrap();
-    let build = json["records"]
-        .as_array()
-        .unwrap()
+    // TLS-130 removed the systematic refusal (a PMU's events enabled and read
+    // apart while a server thread ran; pinned by
+    // `speed_perf_groups_keep_a_pmus_running_times_equal`). Refusals outside the
+    // run's control stay legitimate under the suite's load, any number of them
+    // (review r1, sol): an attach whose ack takes over CDO_SPEED_INSTR_ATTACH_S
+    // (5 s), a short call whose /proc CPU ticks miss `covers`' band, a pinned
+    // group that lost its counters. Each uncounted TIMED record must carry its
+    // own reason (`uncounted`), so a refusal printed by an untimed rebuild
+    // (`head2-again` in the TLS-130 log) cannot stand in for it. The verdict
+    // with ratios missing is pinned deterministically by
+    // `speed_prints_each_uncounted_calls_refusal`.
+    let records = json["records"].as_array().unwrap();
+    let calls: Vec<_> = records.iter().filter(|r| r["total"] != true).collect();
+    let uncounted: Vec<_> = calls
         .iter()
-        .find(|r| r["call"] == "build")
-        .unwrap_or_else(|| panic!("a build record: {json}"));
+        .filter(|r| r["instr"].is_null() || r["cycles"].is_null())
+        .collect();
+    let silent: Vec<_> = uncounted
+        .iter()
+        .filter(|r| !r["uncounted"].is_string())
+        .map(|r| {
+            format!(
+                "{} {} r{}.{}",
+                r["call"], r["side"], r["round"], r["warm_pass"]
+            )
+        })
+        .collect();
     assert!(
-        build["cycles"].as_f64().is_some_and(|c| c > 0.0)
-            && build["clock"].as_f64().is_some_and(|c| c > 0.0),
-        "the real perf's cycles were not counted: {build}"
+        silent.is_empty(),
+        "an uncounted call without its reason: {silent:?}\n{text}"
     );
-    // Every call counted but at most one (round 1's share-sum rule refused 9 of
-    // 64 real calls in an A/A run on CDO, systematically; shares of a hybrid
-    // split sum past 100 %). One uncounted call is allowed: under the whole
-    // suite's load, one went uncounted in 1 of 9 runs (2026-11-21, reason not
-    // caught then); an attach timeout or another perf user multiplexing the
-    // counters makes that legitimate. cdo-speed now logs perf's rows when it
-    // refuses them ("perf output not taken as a count"), shown below on a failure.
+    // Review r2 (Fable): the count in the log, so a drift towards refusing most
+    // calls is visible; review r3: at least one counted call (a second buys
+    // nothing, and more refusals under load are no regression).
+    eprintln!(
+        "real perf: {} of {} calls counted",
+        calls.len() - uncounted.len(),
+        calls.len()
+    );
+    // Review r4 (sol): no call counted only because no attach got through (a
+    // slow perf under load, three times on each server) is no regression:
+    // skipped with the reasons. A refused OUTPUT on every call (a perf format
+    // change, or a pinned rival holding the counters) still fails below.
+    const ATTACH_SIDE: [&str; 4] = [
+        "perf attach failed",
+        "this server's perf gave up",
+        "perf did not stop",
+        "perf ended before the call did",
+    ];
+    if uncounted.len() == calls.len()
+        && uncounted.iter().all(|r| {
+            r["uncounted"]
+                .as_str()
+                .is_some_and(|why| ATTACH_SIDE.iter().any(|a| why.starts_with(a)))
+        })
+    {
+        eprintln!(
+            "skipped: no attach got through under the real perf: {:?}",
+            uncounted
+                .iter()
+                .map(|r| &r["uncounted"])
+                .collect::<Vec<_>>()
+        );
+        return;
+    }
+    assert!(
+        uncounted.len() < calls.len(),
+        "no call counted under the real perf (reasons: {:?}); a real perf format \
+         change refuses every call, as does another pinned perf user holding the counters \
+         (`pgrep -a -x perf`)\n{text}",
+        uncounted
+            .iter()
+            .map(|r| &r["uncounted"])
+            .collect::<Vec<_>>()
+    );
+    if uncounted.is_empty() {
+        assert!(
+            v.contains("(instructions: build x") && v.contains("round-total x"),
+            "{text}"
+        );
+    } else {
+        let counted = records
+            .iter()
+            .filter(|r| r["instr"].as_f64().is_some_and(|i| i > 0.0))
+            .count();
+        assert!(
+            v.contains(&format!("; {counted} of {} calls counted)", records.len())),
+            "{text}"
+        );
+    }
+    // TLS-111: user cycles too, under the real perf's running-% columns (the
+    // unpinned stub servers move between core types, so a PMU's share alone is
+    // below 100 while the kind's sum is 100).
+    // The longest counted call (a short one can have 0 user seconds: no clock).
+    let counted = calls
+        .iter()
+        .filter(|r| !r["instr"].is_null())
+        .max_by(|a, b| a["cpu"].as_f64().partial_cmp(&b["cpu"].as_f64()).unwrap())
+        .unwrap_or_else(|| panic!("a counted record: {json}"));
+    // A clock only where the call had user seconds (review r2, sol).
+    assert!(
+        counted["cycles"].as_f64().is_some_and(|c| c > 0.0)
+            && (counted["user"].as_f64().is_none_or(|u| u <= 0.0)
+                || counted["clock"].as_f64().is_some_and(|c| c > 0.0)),
+        "the real perf's cycles were not counted: {counted}"
+    );
+}
+
+/// ⟨TLS-130⟩ The REAL perf, started and stopped while the attached tasks run
+/// (12 spinning processes, as a server's threads can be at a call's start or
+/// end under load), with cdo-speed's own events (`perf_event_args`), twice:
+/// every stop's output is taken as a count. A PMU's events apart are enabled
+/// and read one after the other, so one of them ran longer: on server1 (perf
+/// 7.0.14, 2026-11-25, no other perf user;
+/// /work/.al-sem/tools-notes/tls130/probe-2026-11-25.log) 10 of 10 such stops
+/// were refused ("multiplexed"), 0 of 10 grouped, so two stops pin it. Then
+/// (review r1, hybrid only) a third stop with the spinners on the P-cores and
+/// 16 ordinary cpu_core events beside ours: the pinned (`:D`) group must read
+/// 100.00 % running (unpinned it read 49-50 %, probe-pinned-2026-11-25.log).
+/// Skipped, saying so, where perf cannot count. Review r1 (sol): the third
+/// stop uses only the P-cores in this process's CPU mask
+/// (`os.sched_getaffinity`; none: that stop is skipped, saying so), every
+/// spinner must be alive and inside that mask before perf attaches, and every
+/// exit path reaps perf, the spinners and the pipes. Review r2 (Fable): the
+/// test waits (up to 10 s) until each spinner's mask EQUALS the wanted one
+/// (before `taskset` applies it, a spinner still has this process's mask);
+/// spinners are registered one by one as each starts, and each ends by itself
+/// after 120 s; perf ending before its ack prints its stderr; a refusal with a
+/// `<not counted>` row at 100.00 % names the pinned-rival cause.
+///
+/// Mutation (2026-11-25, review r1): the P-core list back to the machine-wide
+/// `cpu_core/cpus`, the test run under `taskset -c 12-21` (the E-cores, as a
+/// cpuset without P-cores) -> "a spinner ended or runs outside this process's
+/// CPUs" (red); restored, the same run -> "pinned stop skipped: no P-core",
+/// green. Redone after review r2's wait for the wanted mask (2026-11-26): ->
+/// "a spinner ended, or runs outside this process's CPUs [12, ..., 21] or the
+/// wanted [0, ..., 11]" (red); restored, the same run green (below).
+///
+/// Mutation (2026-11-25): `perf_event_args` back to one `-e` per event ->
+/// "stop 1 refused" with `cpu_core/instructions/u` at 2968286980 ns against its
+/// cycles at 2968141108, `cpu_atom` 2729111466 against 2729080424 (red; also
+/// "not one perf group per PMU" in `speed_perf_parsing_and_warm_judging`).
+/// Restored, green. Redone at two stops (review r1): "stop 1 refused",
+/// `cpu_core` instructions 2434296526 ns against cycles 2434751329 (the second
+/// event longer this time; red). Restored, green. Review r1: `:D` dropped ->
+/// "the pinned group was time-sliced" (now "did not run 100.00 %"), cpu_core
+/// at 33.00 % (red). Restored,
+/// green.
+#[cfg(target_os = "linux")]
+#[test]
+fn speed_perf_groups_keep_a_pmus_running_times_equal() {
+    let py = r#"
+import importlib.machinery, importlib.util, os, select, signal, subprocess, sys, time
+loader = importlib.machinery.SourceFileLoader("cdo_speed", sys.argv[1])
+m = importlib.util.module_from_spec(importlib.util.spec_from_loader("cdo_speed", loader))
+loader.exec_module(m)
+events, why = m.instr_probe()
+if not events:
+    print(f"skipped: {why}")
+    sys.exit(0)
+# The CPUs this process may run on (review r1, sol: a container's cpuset can
+# leave out the P-cores, where `taskset` to them fails).
+allowed = os.sched_getaffinity(0)
+RIVAL = ("another CPU-wide pinned perf user on the host may hold the counters (a real "
+         "signal, not a flake: cdo-speed refuses such counts too). Check with "
+         "`pgrep -a -x perf` and `pgrep -a -x samply` (look for `perf stat -a`/`record -a` "
+         "or `:D` events), and the NMI watchdog: /proc/sys/kernel/nmi_watchdog")
+# Each spinner ends by itself after 120 s, even if this script is killed.
+SPIN = "import time\nend = time.monotonic() + 120\nwhile time.monotonic() < end: pass"
+def stop_once(mask=None, extra=()):
+    spin, perf, fds = [], None, []
+    wanted = mask or allowed
+    pre = ("taskset", "-c", ",".join(map(str, sorted(mask)))) if mask else ()
+    # Every exit path reaps perf, the spinners and the pipes, each registered as
+    # soon as it exists (reviews r1 and r2).
+    try:
+        for _ in range(12):
+            spin.append(subprocess.Popen([*pre, sys.executable, "-c", SPIN]))
+        # Review r2 (Fable): wait (bounded) until `taskset` has applied each mask;
+        # before, a spinner still has this process's mask.
+        deadline = time.monotonic() + 10
+        while any(p.poll() is None and os.sched_getaffinity(p.pid) != wanted for p in spin):
+            if time.monotonic() > deadline:
+                break
+            time.sleep(0.02)
+        for p in spin:
+            if (p.poll() is not None or os.sched_getaffinity(p.pid) != wanted
+                    or not os.sched_getaffinity(p.pid) <= allowed):
+                sys.exit(f"a spinner ended, or runs outside this process's CPUs "
+                         f"{sorted(allowed)} or the wanted {sorted(wanted)}")
+        # Counting from `enable`'s ack, as cdo-speed does: no stop before perf runs.
+        ctl_r, ctl_w = os.pipe()
+        fds.append(ctl_r)
+        fds.append(ctl_w)
+        ack_r, ack_w = os.pipe()
+        fds.append(ack_r)
+        fds.append(ack_w)
+        perf = subprocess.Popen([m.PERF, "stat", "--no-scale", "-x,", *extra,
+                                 *m.perf_event_args(events),
+                                 "-D", "-1", "--control", f"fd:{ctl_r},{ack_w}",
+                                 "-p", ",".join(str(p.pid) for p in spin)],
+                                pass_fds=(ctl_r, ack_w), stderr=subprocess.PIPE, text=True)
+        os.write(ctl_w, b"enable\n")
+        deadline = time.monotonic() + 30
+        got = b""
+        while b"ack" not in got:
+            if perf.poll() is not None:
+                sys.exit(f"perf ended before its ack (exit {perf.returncode}): "
+                         f"{perf.stderr.read()}")
+            left = deadline - time.monotonic()
+            if left <= 0:
+                sys.exit("perf gave no ack in 30 s")
+            if select.select([ack_r], [], [], min(left, 0.5))[0]:
+                got += os.read(ack_r, 64)
+        time.sleep(0.5)
+        perf.send_signal(signal.SIGINT)
+        text = perf.communicate(timeout=30)[1]
+    finally:
+        if perf is not None and perf.poll() is None:
+            perf.kill()
+            perf.wait()
+        for p in spin:
+            p.kill()
+            p.wait()
+        for fd in fds:
+            os.close(fd)
+    if m.perf_parse(text, events) is None:
+        # A pinned group that got no counters reads `<not counted>` at 100.00 %.
+        # Both on one event's row (review r3, sol).
+        lost = any(ln.startswith("<not counted>,") and ln.split(",")[4:5] == ["100.00"]
+                   for ln in text.splitlines())
+        sys.exit(f"refused{': ' + RIVAL if lost else ''}:\n{text}")
+    return text
+def cpu_list(text):
+    out = set()
+    for part in text.strip().split(","):
+        lo, _, hi = part.partition("-")
+        out.update(range(int(lo), int(hi or lo) + 1))
+    return out
+for stop in range(2):
+    stop_once()
+# Pinned (review r1): spinners on the P-cores beside 16 ordinary cpu_core
+# events (two groups of 8; 8 general counters): unpinned, our group would run
+# about half the time; pinned, all of it. Only on the P-cores this process may
+# use; none: that stop is skipped, saying so.
+p_cores = set()
+if events == m.HYBRID_EVENTS:
+    p_cores = cpu_list(open("/sys/bus/event_source/devices/cpu_core/cpus").read()) & allowed
+    if not p_cores:
+        print(f"pinned stop skipped: no P-core in this process's CPUs {sorted(allowed)}")
+if p_cores:
+    eight = ("cpu_core/branches/u,cpu_core/branch-misses/u,cpu_core/cache-misses/u,"
+             "cpu_core/cache-references/u,cpu_core/L1-dcache-loads/u,cpu_core/LLC-loads/u,"
+             "cpu_core/LLC-load-misses/u,cpu_core/dTLB-loads/u")
+    text = stop_once(p_cores, ("-e", "{" + eight + "}", "-e", "{" + eight + "}"))
+    ours = [ln for ln in text.splitlines() if ",cpu_core/instructions/u," in ln
+            or ",cpu_core/cycles/u," in ln]
+    if len(ours) != 2 or any(ln.split(",")[4] != "100.00" for ln in ours):
+        # Every spinner was on the P-cores (checked), so a share under 100 % is a
+        # time-sliced group: `:D` is missing.
+        sys.exit(f"the pinned group did not run 100.00 %: `:D` is missing.\n{text}")
+print("ok")
+"#;
+    let out = crate::clean_env::command("python3")
+        .args(["-c", py])
+        .arg(concat!(env!("CARGO_MANIFEST_DIR"), "/scripts/cdo-speed"))
+        .env("ALSEM_SPEED_CACHE", "/nonexistent/cdo-speed-cache")
+        .output()
+        .unwrap();
+    let text = format!(
+        "{}{}",
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert!(
+        out.status.success() && (text.contains("ok") || text.contains("skipped: ")),
+        "{text}"
+    );
+    eprintln!("{text}");
+}
+
+/// cdo-speed's lines that say why a call went uncounted (one per call; an
+/// attach give-up then stops printing, after 3 failed attaches).
+#[cfg(target_os = "linux")]
+fn speed_refusals(text: &str) -> Vec<&str> {
+    const WHY: [&str; 5] = [
+        "perf output not taken as a count",
+        "call not counted",
+        "perf attach failed",
+        "NOT COVERED",
+        "perf did not stop",
+    ];
+    text.lines()
+        .filter(|l| WHY.iter().any(|w| l.contains(w)))
+        .collect()
+}
+
+/// ⟨TLS-130⟩ An uncounted call prints why, and the verdict says how many
+/// calls were counted: the stub perf multiplexes only the run's first attach
+/// (STUB_PERF_MUX_ATTACH 1: cpu_core's cycles ran 10 % shorter). Exactly one
+/// call record has no count, exactly one refusal line is printed, naming that
+/// call's side's server with perf's rows, and the verdict's "N of M calls
+/// counted" matches speed.json. The other silent paths (perf ending early, an
+/// unreadable output, no instruction at all) print a refusal too; perf ending
+/// early is checked here as well (STUB_PERF_EARLY: every call).
+///
+/// Mutations (2026-11-25): the "perf output not taken as a count" print
+/// dropped -> "one refusal line for the one uncounted call" (red); the
+/// early-end print dropped -> "an early-ended call without its refusal" (red).
+/// Each restored, green. A pinned group without counters (STUB_PERF_PINNED_LOST,
+/// split 70/30) is refused as perf output on every call. Review r1: the
+/// `<not counted>`-at-0.00-% rule dropped from `perf_parse` -> "a pinned group
+/// without counters was counted: 0 of 40 refused" (red). Restored, green.
+/// Review r1 (sol), 2026-11-26: the record's reason dropped in `timed_call`
+/// (`refusal = None`) -> "the refusal's reason on its own record" (red).
+/// Restored, green. Only `Server._instr_start`'s perf call changed to one `-e`
+/// per event (`perf_event_args` and the probe left as they are) -> "every
+/// attach with one pinned group per PMU: 46 attaches, wrong: [[..., "-e",
+/// "cpu_core/instructions/u", "-e", "cpu_core/cycles/u", ...]]" (red).
+/// Restored, green.
+#[cfg(target_os = "linux")]
+#[test]
+fn speed_prints_each_uncounted_calls_refusal() {
+    let bin = tempfile::tempdir().unwrap();
+    let perf = stub_perf(bin.path());
+    let run = |extra: &[(&str, &str)]| {
+        let dir = tempfile::tempdir().unwrap();
+        let mut env = vec![("CDO_SPEED_INSTR", "1"), ("CDO_SPEED_PERF", perf.as_str())];
+        env.extend_from_slice(extra);
+        let (code, text) = speed_with_stub(dir.path(), "1.0", &[], &env);
+        (dir, code, text)
+    };
+
+    let (dir, code, text) = run(&[("STUB_PERF_MUX_ATTACH", "1")]);
+    assert_eq!(code, Some(0), "{text}");
+    let json = speed_json(dir.path());
     let records = json["records"].as_array().unwrap();
     let uncounted: Vec<_> = records
         .iter()
-        .filter(|r| r["instr"].is_null() || r["cycles"].is_null())
-        .map(|r| format!("{} {} r{}", r["call"], r["side"], r["round"]))
+        .filter(|r| r["total"] != true && r["instr"].is_null())
+        .collect();
+    assert_eq!(uncounted.len(), 1, "one call muxed: {uncounted:?}\n{text}");
+    let side = uncounted[0]["side"].as_str().unwrap();
+    let refusals = speed_refusals(&text);
+    assert!(
+        refusals.len() == 1
+            && refusals[0].contains(&format!("cdo-speed: {side}"))
+            && refusals[0].contains("perf output not taken as a count")
+            && refusals[0].contains(",cpu_core/cycles/u,"),
+        "one refusal line for the one uncounted call ({side}): {refusals:?}\n{text}"
+    );
+    let counted = records
+        .iter()
+        .filter(|r| r["instr"].as_f64().is_some_and(|i| i > 0.0))
+        .count();
+    assert!(
+        speed_verdict(&text).contains(&format!("; {counted} of {} calls counted)", records.len())),
+        "the verdict's counted calls: {counted} of {}\n{text}",
+        records.len()
+    );
+    // Review r1 (sol): the refusal is tied to its timed record, and the verdict
+    // with a ratio missing is deterministic: the muxed call is the run's first
+    // timed call (base's build, warm-up pass 1), so the build has no ratio and
+    // the round total keeps its own.
+    assert!(
+        uncounted[0]["call"] == "build"
+            && uncounted[0]["uncounted"] == "perf output not taken as a count"
+            && records
+                .iter()
+                .filter(|r| r["total"] != true && !r["instr"].is_null())
+                .all(|r| r["uncounted"].is_null()),
+        "the refusal's reason on its own record: {uncounted:?}\n{text}"
+    );
+    // Review r4 (Fable): each counted call's running % summed per kind over the
+    // PMUs (`running_pct`; the stub prints 100 + 0), so a real run shows how
+    // often the under-100 rule withholds.
+    let no_pct: Vec<_> = records
+        .iter()
+        .filter(|r| r["total"] != true && !r["instr"].is_null())
+        .filter(|r| {
+            !(r["running_pct"]["instructions"].as_f64() == Some(100.0)
+                && r["running_pct"]["cycles"].as_f64() == Some(100.0))
+        })
+        .map(|r| format!("{} {} {}", r["call"], r["side"], r["running_pct"]))
         .collect();
     assert!(
-        uncounted.len() <= 1,
-        "not counted under the real perf: {uncounted:?}\n{text}"
+        no_pct.is_empty(),
+        "a counted call without its summed running %: {no_pct:?}"
+    );
+    let v = speed_verdict(&text);
+    assert!(
+        v.contains("(instructions: round-total x") && !v.contains("build x"),
+        "the verdict with the build's ratio missing: {v}"
+    );
+    // Review r1 (sol): the arguments of every real attach (`-p`, from
+    // `Server._instr_start`), spelled out, not taken from `perf_event_args`.
+    let argv = std::fs::read_to_string(dir.path().join("state-/perf-argv")).unwrap();
+    let attaches: Vec<Vec<String>> = argv
+        .lines()
+        .map(|l| serde_json::from_str(l).unwrap())
+        .collect();
+    let want = [
+        "-e",
+        "{cpu_core/instructions/u,cpu_core/cycles/u}:D",
+        "-e",
+        "{cpu_atom/instructions/u,cpu_atom/cycles/u}:D",
+    ];
+    let bad: Vec<_> = attaches
+        .iter()
+        .filter(|a| {
+            let events: Vec<&str> = a
+                .iter()
+                .enumerate()
+                .filter(|(i, x)| *x == "-e" || (*i > 0 && a[i - 1] == "-e"))
+                .map(|(_, x)| x.as_str())
+                .collect();
+            events != want || !a.iter().any(|x| x == "-p")
+        })
+        .collect();
+    assert!(
+        // At least one attach per timed call (untimed rebuilds attach too).
+        attaches.len() >= records.iter().filter(|r| r["total"] != true).count() && bad.is_empty(),
+        "every attach with one pinned group per PMU: {} attaches, wrong: {bad:?}",
+        attaches.len()
+    );
+
+    let (_dir, code, text) = run(&[("STUB_PERF_EARLY", "1")]);
+    assert_eq!(code, Some(0), "{text}");
+    assert!(
+        text.lines()
+            .filter(|l| l.contains("perf ended before the call did; call not counted"))
+            .count()
+            >= 2,
+        "an early-ended call without its refusal: {text}"
+    );
+
+    // Review r1: cpu_core's pinned group got no counters (`<not counted>` at
+    // 0 ns, 100.00 %) on calls that ran 70/30 over the PMUs: refused as perf
+    // output, before coverage would see it.
+    let (dir, code, text) = run(&[("STUB_PERF_PINNED_LOST", "1"), ("STUB_PERF_SPLIT", "0.3")]);
+    assert_eq!(code, Some(0), "{text}");
+    let records = speed_json(dir.path())["records"]
+        .as_array()
+        .unwrap()
+        .clone();
+    let calls = records.iter().filter(|r| r["total"] != true).count();
+    let lost = text
+        .lines()
+        .filter(|l| {
+            l.contains("perf output not taken as a count")
+                && l.contains("<not counted>,,cpu_core/instructions/u,0,100.00,,")
+        })
+        .count();
+    assert!(
+        calls > 0
+            && lost >= calls
+            && records.iter().all(|r| r["instr"].is_null())
+            && speed_verdict(&text).contains("(instructions: no call fully counted"),
+        "a pinned group without counters was counted: {lost} of {calls} refused\n{text}"
     );
 }
 
@@ -3482,8 +3978,8 @@ print("ok")
 /// ⟨TLS-111⟩ cdo-speed's perf parsing and warm-up judging, called directly
 /// (the script imported):
 /// - only `instructions` and `cycles`, once each per PMU, reach perf (both are
-///   fixed counters, so nothing multiplexes); any other event, or one twice, is
-///   refused;
+///   fixed counters, so nothing multiplexes), as one perf group per PMU
+///   (TLS-130); any other event, or one twice, is refused;
 /// - `perf_counts` on REAL perf output (server1, perf 7.0.14): a hybrid split
 ///   whose running shares sum to 116 %, a pinned call whose atom rows are
 ///   `<not counted>` (0 ns, 0.00), and `true`'s truncated 93 + 6 count; a
@@ -3507,7 +4003,10 @@ print("ok")
 /// check off -> "<not counted> at a running time: counted" (red). Each
 /// restored, green. Round 4: the old two-sided 2 % band -> "covers(184.41,
 /// 179.63) is False" (red); the cap dropped -> "covers(200.0, 179.63) is True"
-/// (red). Each restored, green.
+/// (red). Each restored, green. TLS-130 review r1 (2026-11-25): `:D` dropped
+/// from `perf_event_args` -> "not one pinned perf group per PMU" (red); the
+/// `<not counted>`-at-0.00-% rule dropped -> "a pinned group without counters:
+/// counted" (red). Each restored, green.
 #[cfg(target_os = "linux")]
 #[test]
 fn speed_perf_parsing_and_warm_judging() {
@@ -3516,8 +4015,12 @@ import importlib.machinery, importlib.util, sys
 loader = importlib.machinery.SourceFileLoader("cdo_speed", sys.argv[1])
 m = importlib.util.module_from_spec(importlib.util.spec_from_loader("cdo_speed", loader))
 loader.exec_module(m)
-m.perf_event_args(m.HYBRID_EVENTS)
-m.perf_event_args(m.PLAIN_EVENTS)
+if m.perf_event_args(m.HYBRID_EVENTS) != [
+        "-e", "{cpu_core/instructions/u,cpu_core/cycles/u}:D",
+        "-e", "{cpu_atom/instructions/u,cpu_atom/cycles/u}:D"]:
+    sys.exit(f"not one pinned perf group per PMU: {m.perf_event_args(m.HYBRID_EVENTS)}")
+if m.perf_event_args(m.PLAIN_EVENTS) != ["-e", "{instructions:u,cycles:u}:D"]:
+    sys.exit(f"not one pinned perf group: {m.perf_event_args(m.PLAIN_EVENTS)}")
 for bad in (m.HYBRID_EVENTS + ("cpu_core/cache-misses/u",),
             ("cpu_core/cycles/u", "cpu_core/cycles/u"),
             ("instructions:u", "cycles:u", "branches:u")):
@@ -3548,9 +4051,17 @@ muxed = (  # 16 more events on cpu_core force multiplexing: its two differ
     "615183361,,cpu_core/cycles/u,240993765,43.00,,\n"
     "977709388,,cpu_atom/instructions/u,131670406,27.00,,\n"
     "298829742,,cpu_atom/cycles/u,131670406,27.00,,\n")
+# TLS-130 review r1, perf 7.0.14 on server1 (2026-11-25, probe-pinned-2026-11-25.log):
+# attached beside a competing pinned group, cpu_core's pinned group got no counters.
+pinned_lost = (
+    "<not counted>,,cpu_core/instructions/u,0,100.00,,\n"
+    "<not counted>,,cpu_core/cycles/u,0,100.00,,\n"
+    "1841531994,,cpu_atom/instructions/u,669085616,62.00,,\n"
+    "540300573,,cpu_atom/cycles/u,669085616,62.00,,\n")
 cases = [
     ("hybrid split", split, True),
     ("pinned, atom not counted", pinned, True),
+    ("a pinned group without counters", pinned_lost, False),
     ("whole-percent truncation", truncated, True),
     ("multiplexed", muxed, False),
     ("a row twice", split + "5,,cpu_core/cycles/u,1025384631,85.00,,\n", False),
@@ -4065,6 +4576,10 @@ fn speed_extra_pair_on_wall_and_never_with_one_pass() {
 ///   instruction: CPU x1.44 and a CLOCK label in head's favour: FAIL (x1.8 at
 ///   equal clocks);
 /// - the lower clock with x1.1 or x0.9 instructions: FAIL (the work changed);
+/// - (TLS-130 review r3, sol) the lower clock with no contradiction
+///   (STUB_SECOND_FACTOR 1): the build is waived (control); the same with
+///   head's build counted partial (STUB_PARTIAL_CALL 1: running % summed to 89,
+///   counts whole): FAIL saying why, `partial` on the record and the warm row;
 /// - a clean clock: head's build spends 0.5x its CPU in the kernel
 ///   (STUB_SYS_HEAD; user time, cycles and instructions unchanged): CPU x1.5,
 ///   no label: FAIL. This also pins the clock's divisor: user + system seconds
@@ -4081,7 +4596,10 @@ fn speed_extra_pair_on_wall_and_never_with_one_pass() {
 /// "instructions x0.9 were waived" (red). Each restored, green. Earlier (round
 /// 2, on the CPI-based cases then): the instruction band, the label condition
 /// and the clock's divisor each red; round 3: contradiction first red (the
-/// first run's assertion, unchanged).
+/// first run's assertion, unchanged). TLS-130 review r3 (2026-11-26):
+/// `timed_call` dropping the call's reason (`partial = None`) -> "a partial
+/// build count was waived (record false, row false)" (red; the control passed
+/// first). Restored, green.
 #[cfg(target_os = "linux")]
 #[test]
 fn speed_cpu_failure_is_advisory_only_when_a_lower_clock_explains_it() {
@@ -4089,7 +4607,12 @@ fn speed_cpu_failure_is_advisory_only_when_a_lower_clock_explains_it() {
     let perf = stub_perf(bin.path());
     let run = |extra: &[(&str, &str)]| {
         let dir = tempfile::tempdir().unwrap();
-        let mut env = vec![("CDO_SPEED_INSTR", "1"), ("CDO_SPEED_PERF", perf.as_str())];
+        // Both PMUs counted: a `<not counted>` PMU is partial (TLS-130 r2).
+        let mut env = vec![
+            ("CDO_SPEED_INSTR", "1"),
+            ("CDO_SPEED_PERF", perf.as_str()),
+            ("STUB_PERF_SPLIT", "0.3"),
+        ];
         env.extend_from_slice(extra);
         let (code, text) = speed_with_stub(dir.path(), "1.0", &[], &env);
         (dir, code, text)
@@ -4124,6 +4647,39 @@ fn speed_cpu_failure_is_advisory_only_when_a_lower_clock_explains_it() {
     assert!(
         !json["advisory"].as_array().unwrap().is_empty() && json["verdict"] == "PASS",
         "{json}"
+    );
+
+    // TLS-130 review r3 (sol), end to end: the same lower clock with no
+    // contradiction waives the build (control); with head's first call on each
+    // server (its build) counted partial (STUB_PARTIAL_CALL: running % summed
+    // to 89, counts whole), the build's failure stays a FAIL, says why, and
+    // speed.json's record and warm row carry `partial`.
+    let waivable = [("STUB_SLOW_HEAD", "1.5"), ("STUB_SECOND_FACTOR", "1.0")];
+    let (_dir, code, text) = run(&waivable);
+    assert!(
+        code == Some(0) && text.contains("ADVISORY (not failing): build: CPU time x1."),
+        "control: the build was not waived: {text}"
+    );
+    let (dir, code, text) = run(&[waivable[0], waivable[1], ("STUB_PARTIAL_CALL", "1")]);
+    let json = speed_json(dir.path());
+    let partial_record = json["records"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|r| r["call"] == "build" && r["side"] == "head" && r["partial"].is_string());
+    let partial_row = json["warm_rows"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|r| r["call"] == "build" && r["partial"].is_string());
+    assert!(
+        code == Some(1)
+            && text.lines().any(|l| l.contains("FAIL: build: CPU time x1.")
+                && l.contains("(no CPU advisory: a count may be partial: head build r"))
+            && !text.contains("ADVISORY (not failing): build:")
+            && partial_record
+            && partial_row,
+        "a partial build count was waived (record {partial_record}, row {partial_row}): {text}"
     );
 
     // More cycles per instruction (a stall regression's shape): never waived.
@@ -4179,7 +4735,8 @@ fn speed_cpu_failure_is_advisory_only_when_a_lower_clock_explains_it() {
 ///   wall x1.8 fails too (limit 1.6): nothing is made advisory;
 /// - the counters ran for 0.6 of each call's CPU seconds (STUB_PERF_COVER):
 ///   each burning call's record keeps its counts but reads `covered: false`,
-///   with no clock, so no label and no advisory: FAIL.
+///   with no instruction count (TLS-130) and no clock, so no build ratio, no
+///   label and no advisory: FAIL.
 ///
 /// The positional factor is off (STUB_SECOND_FACTOR 1) in the last two, so no
 /// extra pair runs; in the first it runs (its warm-tests is contradicted).
@@ -4193,6 +4750,9 @@ fn speed_cpu_failure_is_advisory_only_when_a_lower_clock_explains_it() {
 /// per instruction to a lower clock): all three proofs redone, each red again
 /// (the partly covered run exit 0; "CPU ADVISORY" on the CPU-and-wall run; the
 /// build advisory from pass 2 alone, x1.47 and x1.00 at equal clocks, exit 0).
+/// TLS-130 (2026-11-25): `timed_call` keeping an uncovered count's `instr` ->
+/// "uncovered counts kept for diagnostics, with no instruction count or clock"
+/// (red). Restored, green.
 #[cfg(target_os = "linux")]
 #[test]
 fn speed_cpu_advisory_needs_covering_counts_and_a_cpu_only_failure() {
@@ -4200,7 +4760,12 @@ fn speed_cpu_advisory_needs_covering_counts_and_a_cpu_only_failure() {
     let perf = stub_perf(bin.path());
     let run = |extra: &[(&str, &str)]| {
         let dir = tempfile::tempdir().unwrap();
-        let mut env = vec![("CDO_SPEED_INSTR", "1"), ("CDO_SPEED_PERF", perf.as_str())];
+        // Both PMUs counted, so only the guard under test withholds (TLS-130 r2).
+        let mut env = vec![
+            ("CDO_SPEED_INSTR", "1"),
+            ("CDO_SPEED_PERF", perf.as_str()),
+            ("STUB_PERF_SPLIT", "0.3"),
+        ];
         env.extend_from_slice(extra);
         let (code, text) = speed_with_stub(dir.path(), "1.0", &[], &env);
         (dir, code, text)
@@ -4251,9 +4816,18 @@ fn speed_cpu_advisory_needs_covering_counts_and_a_cpu_only_failure() {
     assert!(
         !builds.is_empty()
             && builds.iter().all(|r| r["covered"] == false
-                && r["instr"].as_f64().is_some_and(|i| i > 0.0)
+                && r["counts"]["cpu_core/instructions/u"]
+                    .as_f64()
+                    .is_some_and(|i| i > 0.0)
+                && r["instr"].is_null()
                 && r["clock"].is_null()),
-        "uncovered counts kept for diagnostics, with no clock: {builds:?}"
+        "uncovered counts kept for diagnostics, with no instruction count or clock: {builds:?}"
+    );
+    // TLS-130: so no instruction ratio either (a multiplexed perf group loses
+    // the same time on both its events; only coverage shows it).
+    assert!(
+        !speed_verdict(&text).contains("build x"),
+        "an uncovered count reached an instruction ratio: {text}"
     );
 }
 
@@ -4276,7 +4850,12 @@ fn speed_cpu_advisory_needs_covering_counts_and_a_cpu_only_failure() {
 ///   warm-up's 1.6): no advisory, FAIL;
 /// - all three at a lower clock, but head's 9th call (a round call) counted for
 ///   half its CPU (STUB_UNCOVER_CALL): the round total is not covered, so no
-///   clock: FAIL.
+///   clock: FAIL;
+/// - (TLS-130 review r3, sol) all three at a lower clock, but head's 9th call
+///   counted partial (STUB_PARTIAL_CALL: its running % summed to 89, counts
+///   whole): no advisory, FAIL saying why; the call's record carries `partial`
+///   and the round-total row the reason joined from it (head's round-total
+///   record is judged in memory, not written to speed.json).
 ///
 /// Mutations (2026-11-21, round 4): the rounds row judged on its medians (one
 /// sample, as a warm-up row) -> "medians of different rounds combined" (red);
@@ -4284,7 +4863,12 @@ fn speed_cpu_advisory_needs_covering_counts_and_a_cpu_only_failure() {
 /// ADVISORY" on the x1.35 wall run (red); the round total's `covered` from
 /// `any` record instead of `all` -> "an uncovered round call let the round
 /// total be advisory" (red). Each restored, green. Round 5 (parallel runs, 0.4 s
-/// burns): all three redone, each red again, restored, green.
+/// burns): all three redone, each red again, restored, green. TLS-130 review
+/// r3 (2026-11-26), each alone: `timed_call` dropping the call's reason
+/// (`partial = None`) -> "a partial round call let the round total be advisory
+/// (call false, total false, row false)" (red); the round total's join of its
+/// calls' reasons off (`partial=None`) -> "(call true, total false, row
+/// false)" (red). Each restored, green.
 #[cfg(target_os = "linux")]
 #[test]
 fn speed_cpu_advisory_judges_every_round_by_itself() {
@@ -4298,6 +4882,8 @@ fn speed_cpu_advisory_judges_every_round_by_itself() {
             ("STUB_SECOND_FACTOR", "1.0"),
             ("STUB_ROUND_BURN_S", "0.4"),
             ("STUB_ROUND_HEAD", head),
+            // Both PMUs counted: a `<not counted>` PMU is partial (TLS-130 r2).
+            ("STUB_PERF_SPLIT", "0.3"),
         ];
         env.extend_from_slice(extra);
         let (code, text) = speed_with_stub(
@@ -4314,11 +4900,12 @@ fn speed_cpu_advisory_judges_every_round_by_itself() {
             && !text.contains("CPU ADVISORY")
     };
 
-    let cases: [(&str, &[(&str, &str)]); 4] = [
+    let cases: [(&str, &[(&str, &str)]); 5] = [
         ("1.25:1,1.25:1,1.25:1", &[]),
         ("1:1.25,1.25:1,1.25:0.8", &[]),
         ("1.35:1,1.35:1,1.35:1", &[]),
         ("1.25:1,1.25:1,1.25:1", &[("STUB_UNCOVER_CALL", "9")]),
+        ("1.25:1,1.25:1,1.25:1", &[("STUB_PARTIAL_CALL", "9")]),
     ];
     let results: Vec<_> = std::thread::scope(|s| {
         let runs: Vec<_> = cases
@@ -4364,6 +4951,50 @@ fn speed_cpu_advisory_judges_every_round_by_itself() {
         fails_with_no_advisory(code, &text) && text.contains("NOT COVERED"),
         "an uncovered round call let the round total be advisory: {text}"
     );
+
+    // TLS-130 review r3 (sol): the first case's waived round total, with
+    // head's 9th call (a round call) counted partial (STUB_PARTIAL_CALL): a
+    // FAIL that says why; the call's record carries `partial`, and the
+    // round-total row carries the reason joined from that call (head's
+    // round-total record is judged in memory and not written to speed.json,
+    // so the row's text is where the join shows).
+    let (dir, code, text) = results.next().unwrap();
+    let json: serde_json::Value = serde_json::from_str(
+        &std::fs::read_to_string(
+            dir.path()
+                .join("state---rounds-3---max-rounds-3/out/speed.json"),
+        )
+        .unwrap(),
+    )
+    .unwrap();
+    let records = json["records"].as_array().unwrap();
+    let call = records.iter().any(|r| {
+        r["total"] != true && r["side"] == "head" && r["round"] != 0 && r["partial"].is_string()
+    });
+    // The joined reason: "head round-total r<k>: <call>: instructions ran 89.00 % ...".
+    let total = json["rows"].as_array().unwrap().iter().any(|r| {
+        r["call"] == "round-total"
+            && r["partial"].as_str().is_some_and(|p| {
+                p.contains("head round-total r") && p.contains(": instructions ran 89.00 %")
+            })
+    });
+    let row = json["rows"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|r| r["call"] == "round-total" && r["partial"].is_string());
+    assert!(
+        fails_with_no_advisory(code, &text)
+            && text
+                .lines()
+                .any(|l| l.contains("FAIL: round-total: CPU time x1.")
+                    && l.contains("(no CPU advisory: a count may be partial: head round-total r"))
+            && call
+            && total
+            && row,
+        "a partial round call let the round total be advisory (call {call}, total {total}, \
+         row {row}): {text}"
+    );
 }
 
 /// ⟨TLS-111 review r4⟩ The CPU ratio at equal clocks scales head's USER time
@@ -4407,6 +5038,8 @@ fn speed_cpu_advisory_scales_user_time_only_and_by_size() {
             ("CDO_SPEED_PERF", perf.as_str()),
             ("STUB_SECOND_FACTOR", "1.0"),
             ("STUB_SLEEP_S", "2"),
+            // Both PMUs counted, so only the guard under test withholds (TLS-130 r2).
+            ("STUB_PERF_SPLIT", "0.3"),
         ];
         env.extend_from_slice(extra);
         let (code, text) = speed_with_stub(dir.path(), "1.0", &[], &env);
@@ -4447,6 +5080,249 @@ fn speed_cpu_advisory_scales_user_time_only_and_by_size() {
         })
         .collect();
     assert!(waived.is_empty(), "{}", waived.join("\n\n"));
+}
+
+/// ⟨TLS-130 reviews r1 and r2, sol and Fable⟩ A count that may be partial never
+/// makes a CPU failure advisory: no bound on what it lost is sound (the sides'
+/// normal running-time excess differs, and lost time need not have run at the
+/// call's average rate), so `cpu_advisory` gives none for a row where either
+/// side's count is partial (`partial_count`). Through real `perf stat -x,`
+/// rows (`perf_parse`, `partial_count`), `judge_warm` and `cpu_advisory`, on a
+/// warm-up build, base 40 s CPU, all user time. Each counterexample's MEASURED
+/// ratios pass every other condition (checked), so the old rules waived it:
+/// - sol r2: head CPU and wall x1.54, measured instructions x1.019 and x1.298
+///   at equal clocks (CLOCK x0.843); head's `cpu_atom` group `<not counted>`
+///   (a pinned group lost after its tasks ran there), and the same with base's;
+/// - Fable r2: head CPU and wall x1.45, measured instructions x0.985, clock
+///   x0.8648 (the label only from the loss), x1.254 at equal clocks; head's
+///   running % summed to 99 over the PMUs (80 + 19: review r3, sol, the case a
+///   truncation allowance let through).
+///
+/// Each partial row is not waived and says why (`row["partial"]`). Controls:
+/// the same measured numbers from whole counts (both PMUs counted, 84 % and
+/// 36 %) are waived, so only the partial rule withholds. `partial_count` itself:
+/// a hybrid split and a plain 100 % are whole; a `<not counted>` PMU, 80 + 19,
+/// the real `true` line truncated to 93 + 6 (taken as partial: it only withholds
+/// an advisory) and a plain 98 % are partial. The end-to-end path (a stub run's
+/// verdict and speed.json) is pinned in
+/// `speed_cpu_failure_is_advisory_only_when_a_lower_clock_explains_it` and
+/// `speed_cpu_advisory_judges_every_round_by_itself`.
+///
+/// Mutation (2026-11-26, review r2): `row.get("partial") or` dropped from
+/// `cpu_advisory` -> "a partial count waived a FAIL: sol r2 (head), sol r2
+/// (base), Fable r2" (red). Restored, green. Review r3 (2026-11-26), each
+/// break alone, each restored, then green: `partial_count`'s `<not counted>`
+/// arm off (`lost = []`) -> "sol r2 (head): the row does not say why (no
+/// `partial`)" (red); its running-% arm off (`total < 0`) -> "Fable r2: the row
+/// does not say why" (red); `judge`'s coverage arm off -> "Fable r3 (head not
+/// covered): the row does not say why" (red); `cpu_advisory` withholding on a
+/// partial count in any round (`any(partial)`) -> "a partial count in a round
+/// under the limit withheld the rounds row's advisory" (red). Review r4 (sol):
+/// the waiver's CLOCK condition taken again from the displayed label over every
+/// round (`"clock" in row_labels(row)`) -> "sol r4: a partial round under the
+/// limit supplied the CLOCK label" (red). Restored, green.
+#[cfg(target_os = "linux")]
+#[test]
+fn speed_cpu_advisory_never_on_a_partial_count() {
+    let py = r#"
+import importlib.machinery, importlib.util, sys
+loader = importlib.machinery.SourceFileLoader("cdo_speed", sys.argv[1])
+m = importlib.util.module_from_spec(importlib.util.spec_from_loader("cdo_speed", loader))
+loader.exec_module(m)
+E = m.HYBRID_EVENTS
+
+def csv(instr, cycles, ns, form):
+    # `perf stat --no-scale -x,` rows, the real shapes: "whole" split 70/30 at
+    # 84 % and 36 %; "atom lost" cpu_atom `<not counted>`; "short" 80 % and 19 %.
+    if form == "atom lost":
+        return (f"{int(instr)},,cpu_core/instructions/u,{int(ns)},100.00,,\n"
+                f"{int(cycles)},,cpu_core/cycles/u,{int(ns)},100.00,,\n"
+                "<not counted>,,cpu_atom/instructions/u,0,0.00,,\n"
+                "<not counted>,,cpu_atom/cycles/u,0,0.00,,\n")
+    pc, pa = {"whole": ("84.00", "36.00"), "short": ("80.00", "19.00")}[form]
+    out = ""
+    for pmu, f, pct in (("cpu_core", 0.7, pc), ("cpu_atom", 0.3, pa)):
+        out += (f"{int(instr * f)},,{pmu}/instructions/u,{int(ns * f)},{pct},,\n"
+                f"{int(cycles * f)},,{pmu}/cycles/u,{int(ns * f)},{pct},,\n")
+    return out
+
+def rec(side, p, cpu, instr, cycles, form):
+    # "uncovered" (review r3, Fable): every PMU counted, running time 90 % of
+    # the CPU seconds (under `covers`' band). `timed_call` drops such a count;
+    # here its instructions and clock are kept BY HAND, so only `judge`'s
+    # coverage arm can withhold the advisory.
+    uncovered = form == "uncovered"
+    ns = cpu * 1e9 * (0.9 if uncovered else 1.0)
+    parsed = m.perf_parse(csv(instr, cycles, ns, "whole" if uncovered else form), E)
+    if parsed is None:
+        sys.exit(f"precondition: {form} parses")
+    i = m.kind_total(parsed[0], "instructions")
+    c = m.kind_total(parsed[0], "cycles")
+    running = m.kind_total(parsed[1], "instructions") / 1e9
+    covered = m.covers(running, cpu)
+    if covered == uncovered:
+        sys.exit(f"precondition: {form} {'covers' if covered else 'does not cover'}")
+    return dict(call="build", side=side, round=0, warm_pass=p, wall=cpu, cpu=cpu, sha="",
+                load=1.0, instr=i, cycles=c, user=cpu, sys=0.0, running_s=running,
+                covered=covered, partial=m.partial_count(parsed),
+                **m.clock_cpi(c, cpu, i, True))
+
+def build_row(cpu_ratio, ir, cr, head_form, base_form="whole"):
+    # Measured: head CPU and wall x cpu_ratio, instructions x ir, clock x cr.
+    recs = []
+    for p in range(2):
+        hc = 40.0 * cpu_ratio
+        recs.append(rec("base", p, 40.0, 1e11, 1.2e11, base_form))
+        recs.append(rec("head", p, hc, 1e11 * ir, 1.2e11 * cr * hc / 40, head_form))
+    rows = m.judge_warm(recs)
+    if len(rows) != 1 or not rows[0]["judged"]:
+        sys.exit(f"precondition: one judged build row: {rows}")
+    return rows[0]
+
+cases = [  # (name, CPU ratio, instructions, clock, head form, base form)
+    ("sol r2 (head)", 1.54, 1.019, 1.298 / 1.54, "atom lost", "whole"),
+    ("sol r2 (base)", 1.54, 1.019, 1.298 / 1.54, "whole", "atom lost"),
+    ("Fable r2", 1.45, 0.985, 0.8648, "short", "whole"),
+    ("Fable r3 (head not covered)", 1.54, 1.019, 1.298 / 1.54, "uncovered", "whole"),
+]
+waived = []
+for name, cpu, ir, cr, hf, bf in cases:
+    control = build_row(cpu, ir, cr, "whole")
+    if m.cpu_advisory(control) is None:
+        sys.exit(f"control ({name}): the same numbers from whole counts not waived")
+    row = build_row(cpu, ir, cr, hf, bf)
+    if not row.get("partial"):
+        sys.exit(f"{name}: the row does not say why (no `partial`)")
+    if m.cpu_advisory(row) is not None:
+        waived.append(name)
+if waived:
+    sys.exit(f"a partial count waived a FAIL: {', '.join(waived)}")
+
+# A rounds row (review r3, Fable): head CPU x1.25 in rounds 1 and 3 (over the
+# 1.2 limit), x1.1 in round 2, each explained by a lower clock. A partial count
+# in round 2 (not judged) leaves the advisory; one in round 1 withholds it.
+def rounds_row(partial_round, spec=((1, 1.25, 1 / 1.25), (2, 1.1, 1 / 1.1),
+                                     (3, 1.25, 1 / 1.25))):
+    # spec: (round, head CPU and wall ratio, head clock ratio); instructions equal.
+    recs = []
+    for rnd, ratio, clock in spec:
+        for side, cpu, cr in (("base", 10.0, 1.0), ("head", 10.0 * ratio, clock)):
+            form = "atom lost" if side == "head" and rnd == partial_round else "whole"
+            r = rec(side, 0, cpu, 1e10, 1.2e10 * cr * cpu / 10, form)
+            recs.append(dict(r, call="query", round=rnd))
+    return next(r for r in m.judge(recs)[0] if r["call"] == "query")
+if m.cpu_advisory(rounds_row(2)) is None:
+    sys.exit("a partial count in a round under the limit withheld the rounds row's advisory")
+if m.cpu_advisory(rounds_row(1)) is not None:
+    sys.exit("a partial count in an over-limit round waived the rounds row")
+# Review r4 (sol): the CLOCK condition only from whole rounds. Clocks x0.860,
+# x0.865, x0.890: with round 2 whole the median x0.865 is a CLOCK label and the
+# row is waived (control); with round 2 partial the whole rounds' median x0.875
+# is inside the x1.15 band, so no advisory, although the displayed label (all
+# rounds) still reads CLOCK.
+sol_r4 = ((1, 1.25, 0.860), (2, 1.10, 0.865), (3, 1.25, 0.890))
+if m.cpu_advisory(rounds_row(None, sol_r4)) is None:
+    sys.exit("control (sol r4): whole rounds at clocks x0.860/0.865/0.890 not waived")
+row = rounds_row(2, sol_r4)
+if "clock" not in m.row_labels(row):
+    sys.exit("precondition (sol r4): the displayed label reads CLOCK")
+if m.cpu_advisory(row) is not None:
+    sys.exit("sol r4: a partial round under the limit supplied the CLOCK label")
+
+def parsed(text, events=E):
+    p = m.perf_parse(text, events)
+    if p is None:
+        sys.exit(f"precondition: parses: {text!r}")
+    return p
+truncated = ("145690,,cpu_core/instructions/u,2590713,93.00,,\n"
+             "362574,,cpu_core/cycles/u,2590713,93.00,,\n"
+             "0,,cpu_atom/instructions/u,173406,6.00,,\n"
+             "0,,cpu_atom/cycles/u,173406,6.00,,\n")
+plain = "10,,instructions:u,500,{p},,\n20,,cycles:u,500,{p},,\n"
+for name, text, events, whole in [
+    ("hybrid split", csv(1e9, 2e9, 1e9, "whole"), E, True),
+    ("plain 100 %", plain.format(p="100.00"), m.PLAIN_EVENTS, True),
+    ("a PMU not counted", csv(1e9, 2e9, 1e9, "atom lost"), E, False),
+    ("80 + 19 (review r3)", csv(1e9, 2e9, 1e9, "short"), E, False),
+    ("the real `true` truncated to 93 + 6", truncated, E, False),
+    ("plain 98 %", plain.format(p="98.00"), m.PLAIN_EVENTS, False),
+]:
+    if (m.partial_count(parsed(text, events)) is None) != whole:
+        sys.exit(f"partial_count: {name} read {'partial' if whole else 'whole'}")
+print("ok")
+"#;
+    let out = crate::clean_env::command("python3")
+        .args(["-c", py])
+        .arg(concat!(env!("CARGO_MANIFEST_DIR"), "/scripts/cdo-speed"))
+        .env("ALSEM_SPEED_CACHE", "/nonexistent/cdo-speed-cache")
+        .output()
+        .unwrap();
+    let text = format!(
+        "{}{}",
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert!(out.status.success() && text.contains("ok"), "{text}");
+}
+
+/// ⟨TLS-130 review r3, Fable⟩ `scripts/ir-cache-acceptance` counts through
+/// cdo-speed's `perf_parse`: its `run_counted` runs a command under a stub perf
+/// that writes a fixed hybrid count (70/30, 1000 instructions, 2000 cycles)
+/// and must read it. `perf_parse` gaining a third value made that script's
+/// `counts, running = parsed` crash every counted run while every test stayed
+/// green; this test runs the script's own parse path.
+///
+/// Mutation (2026-11-26): the unpacking restored -> "ValueError: too many
+/// values to unpack" (red). Restored, green.
+#[cfg(target_os = "linux")]
+#[test]
+fn ir_cache_acceptance_counts_through_cdo_speeds_parse() {
+    use std::os::unix::fs::PermissionsExt;
+    let bin = tempfile::tempdir().unwrap();
+    let perf = bin.path().join("perf");
+    std::fs::write(
+        &perf,
+        r#"#!/usr/bin/env python3
+import os, sys
+a = sys.argv[1:]
+with open(a[a.index("-o") + 1], "w") as f:
+    f.write("700,,cpu_core/instructions/u,7000,84.00,,\n"
+            "1400,,cpu_core/cycles/u,7000,84.00,,\n"
+            "300,,cpu_atom/instructions/u,3000,36.00,,\n"
+            "600,,cpu_atom/cycles/u,3000,36.00,,\n")
+cmd = a[a.index("--") + 1:]
+os.execvp(cmd[0], cmd)
+"#,
+    )
+    .unwrap();
+    std::fs::set_permissions(&perf, std::fs::Permissions::from_mode(0o755)).unwrap();
+    let py = r#"
+import importlib.machinery, importlib.util, os, sys
+loader = importlib.machinery.SourceFileLoader("ir_cache_acceptance", sys.argv[1])
+m = importlib.util.module_from_spec(importlib.util.spec_from_loader("ir_cache_acceptance", loader))
+loader.exec_module(m)
+instr, cycles, cpu, wall, covered = m.run_counted(["true"], dict(os.environ),
+                                                  m.speed.HYBRID_EVENTS)
+if (instr, cycles) != (1000, 2000):
+    sys.exit(f"run_counted read {instr} instructions, {cycles} cycles")
+print("ok")
+"#;
+    let out = crate::clean_env::command("python3")
+        .args(["-c", py])
+        .arg(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/scripts/ir-cache-acceptance"
+        ))
+        .env("CDO_SPEED_PERF", &perf)
+        .env("ALSEM_SPEED_CACHE", "/nonexistent/cdo-speed-cache")
+        .output()
+        .unwrap();
+    let text = format!(
+        "{}{}",
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert!(out.status.success() && text.contains("ok"), "{text}");
 }
 
 /// ⟨TLS-104⟩ A host suspend during a timed call is labelled, never hidden: the
