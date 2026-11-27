@@ -1274,9 +1274,9 @@ scan_once() {
         # The kernel's key for its lock, as its taker read it (take_timed).
         key=$(field lock_key)
         # A record with no key (written by an older cdo-slot, which other
-        # worktrees still run): the kernel's key from /proc/locks, the one
-        # FLOCK write lock on the id file's inode (only `stat`'s device is
-        # unreliable, on btrfs); none or more than one is unknown.
+        # worktrees still run): the kernel's key from a holder's fdinfo
+        # (locks_key; `stat`'s device is unreliable on btrfs); none is
+        # unknown.
         [[ "$key" =~ ^[0-9a-f]+:[0-9a-f]+:[0-9]+$ ]] || key=$(locks_key "$ids/timed.$tid") || key=""
         if [[ -z "$key" ]]; then
             out+="unknown provisional its lock key cannot be told: timed by $(field owner) since $(field since) ($(field reason))"$'\n'
@@ -1324,21 +1324,45 @@ scan_once() {
 # locks_key <file>: the kernel's key of the FLOCK write lock on <file>, read
 # from the fdinfo of a descriptor that has the file open and carries a lock
 # (not /proc/locks: it hides a lock whose taker has exited); 1 when none does.
+# The descriptor is found by its link, then read: two observations (review
+# r14, sol), so the fdinfo must name the same file as this process's own open
+# of it (its mnt_id and ino), and the link must still name it after the read;
+# a descriptor that moved in between proves nothing.
 locks_key() {
-    local d line ino
-    local -a w
+    local d line ino my_mnt="" my_ino="" mnt lino key ofd
+    local -a w ds
     ino=$(stat -c %i "$1" 2>/dev/null) || return 1
-    local -a ds
+    # The file's mnt_id and ino as the kernel prints them, from an open of it.
+    exec {ofd}<"$1" || return 1
+    while IFS= read -r line; do
+        case "$line" in
+            mnt_id:*) my_mnt=${line##*[[:space:]]} ;;
+            ino:*) my_ino=${line##*[[:space:]]} ;;
+        esac
+    done 2>/dev/null <"/proc/$BASHPID/fdinfo/$ofd" || true
+    exec {ofd}<&-
+    [[ -n "$my_mnt" && "$my_ino" == "$ino" ]] || return 1
     mapfile -t ds < <(find /proc/[0-9]*/fd -lname "$(glob_quote "$1")" 2>/dev/null)
     for d in "${ds[@]}"; do
+        mnt="" lino="" key=""
         while IFS= read -r line; do
-            [[ "$line" == lock:* ]] || continue
-            read -r -a w <<<"$line"
-            if [[ "${w[2]:-}" == FLOCK && "${w[4]:-}" == WRITE && "${w[6]:-}" == *":$ino" ]]; then
-                echo "${w[6]}"
-                return 0
-            fi
+            case "$line" in
+                mnt_id:*) mnt=${line##*[[:space:]]} ;;
+                ino:*) lino=${line##*[[:space:]]} ;;
+                lock:*)
+                    read -r -a w <<<"$line"
+                    if [[ -z "$key" && "${w[2]:-}" == FLOCK && "${w[4]:-}" == WRITE && "${w[6]:-}" == *":$ino" ]]; then
+                        key=${w[6]}
+                    fi
+                    ;;
+            esac
         done 2>/dev/null <"${d/\/fd\///fdinfo/}" || true
+        [[ -n "$key" ]] || continue
+        # A lock line with any mismatch: unknown, not the next descriptor.
+        [[ "$mnt" == "$my_mnt" && "$lino" == "$my_ino" ]] || return 1
+        [[ "$(readlink "$d" 2>/dev/null)" == "$1" ]] || return 1
+        echo "$key"
+        return 0
     done
     return 1
 }

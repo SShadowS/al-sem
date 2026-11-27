@@ -6747,6 +6747,15 @@ fn run_pre_commit(repo_name: &str, real_check_goldens: bool, stage: impl FnOnce(
         )
         .unwrap();
         stub(repo.join("scripts/require-rttime"), "require-rttime");
+        // ⟨TLS-135⟩ check-goldens' entry check (scripts/build-entry) and
+        // what it runs, against a private slot folder (CDO_SLOT_DIR below).
+        for f in ["build-entry", "cdo-slot", "awake-clock", "host-suspended"] {
+            std::fs::copy(
+                manifest.join("scripts").join(f),
+                repo.join("scripts").join(f),
+            )
+            .unwrap();
+        }
         stub(bin.join("cargo"), "cargo");
         make_golden_dirs(&repo);
     } else {
@@ -6765,6 +6774,7 @@ fn run_pre_commit(repo_name: &str, real_check_goldens: bool, stage: impl FnOnce(
         .env("HOME", dir.path())
         .env("PATH", path)
         .env("CHECK_GOLDENS_FORCE", "1")
+        .env("CDO_SLOT_DIR", dir.path().join("slot"))
         .env("GIT_CONFIG_NOSYSTEM", "1")
         .env("GIT_CONFIG_GLOBAL", "/dev/null")
         .output()
