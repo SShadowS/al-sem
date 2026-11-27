@@ -100,7 +100,19 @@ const BASE_ENV: [(&str, &str); 5] = [
 
 impl Slot {
     fn new() -> Self {
-        let tmp = tempfile::tempdir().unwrap();
+        Self::new_in(&std::env::temp_dir())
+    }
+    /// ⟨TLS-135 review r12, Fable⟩ A slot under the repository's `target/`, on
+    /// the repository's own filesystem (btrfs on server1, where `/tmp` is
+    /// overlay): a lock's key there differs from `stat`'s, and a slot under
+    /// `/tmp` never showed it.
+    fn on_repo_fs() -> Self {
+        let base = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("target/cdo-slot-tests");
+        std::fs::create_dir_all(&base).unwrap();
+        Self::new_in(&base)
+    }
+    fn new_in(base: &std::path::Path) -> Self {
+        let tmp = tempfile::tempdir_in(base).unwrap();
         let dog = Watchdog::new(tmp.path().join("slot"));
         Slot(tmp, dog)
     }
@@ -1931,7 +1943,8 @@ fn cdo_slot_reads_the_status_once_per_check() {
 /// Mutations (2026-11-19): `timed_now` deciding from the first timing file's
 /// PID (`alive $(field pid)`) -> #1 reads untimed after T1's kill (red; the
 /// files sort by random id, so this break shows only when T1's file sorts
-/// first: the proof run did); the keeper's writer watch dropped (wait for go
+/// first: the proof run did; since TLS-135 r8 #1 runs its two timings one
+/// after the other, so this break no longer applies); the keeper's writer watch dropped (wait for go
 /// only) -> #4 stays held (red); `state`'s mine test written `a || b && c`
 /// (bash groups it `(a || b) && c`, so a token share of a run's bound hold is
 /// not "mine") -> #3's sharer waits and nothing is timed (red). Each restored,
@@ -1944,11 +1957,24 @@ fn cdo_slot_decides_from_locks_alone() {
     let t1 = sleeper();
     let t2 = sleeper();
     let (p1, p2) = (t1.id().to_string(), t2.id().to_string());
-    for (p, r) in [(&p1, "first"), (&p2, "second")] {
-        let (code, text) = s.run("A", &["acquire", "lane", r, "--bind", p, "--timed"], &[]);
-        assert_eq!(code, Some(4), "{text}");
-    }
+    // One timing at a time (TLS-135 r8): the second starts once the first,
+    // killed with its bound process, has ended; probes read timed throughout.
+    let (code, text) = s.run(
+        "A",
+        &["acquire", "lane", "first", "--bind", &p1, "--timed"],
+        &[],
+    );
+    assert_eq!(code, Some(4), "{text}");
     drop(t1);
+    until("the first timing ended", &|| {
+        s.probe() == "held=1 own=0 timed=0"
+    });
+    let (code, text) = s.run(
+        "A",
+        &["acquire", "lane", "second", "--bind", &p2, "--timed"],
+        &[],
+    );
+    assert_eq!(code, Some(4), "{text}");
     for _ in 0..15 {
         assert!(
             s.probe().ends_with("timed=1"),
@@ -2932,8 +2958,9 @@ fn cdo_slot_timed_waits_for_build_scripts_and_late_builds() {
 
 /// ⟨TLS-89⟩ Timings by `acquire --bind --timed`, in a hold taken by hand:
 /// - A timing ends with its bound process; the hold stays.
-/// - Review r1 (Fable): a second timing in that hold waits for a build too,
-///   and keeps its own timing when the first one ends; a refused `acquire
+/// - One timing at a time (TLS-135 review r8, replacing TLS-89's "a second
+///   timing in that hold waits for a build too"): a second timing is refused
+///   at once while the first runs, and starts once it ended; a refused `acquire
 ///   --bind --timed` with no session or token frees the slot it took.
 /// - Review r1 (sol): the hold it shares is released while it waits for a
 ///   build -> refused once the build ends, never a start with no hold.
@@ -2943,19 +2970,25 @@ fn cdo_slot_timed_waits_for_build_scripts_and_late_builds() {
 /// - Review r3/r4 (sol): the hold it took or shared is replaced in the window
 ///   right after the acquire (the test hook pauses there) -> refused, and the
 ///   replacement is left alone and untimed.
-/// - Review r3/r4 (sol): a refused second timing bound to the SAME process (a
-///   retry), also one that refuses concurrently with a retry that starts,
-///   leaves the other timing on.
-/// - Review r5 (sol): a timing that TOOK the slot and is refused while a
-///   token-sharing timing runs: the sharer's timing stays on.
+/// - Review r3/r4 (sol): a second timing bound to the SAME process (a retry)
+///   leaves the first timing on and takes none (since TLS-135 r10: that
+///   process owns the timing by binding, and is told "already timed ... a
+///   duplicate request", exit 4, before it waits for any hold).
+/// - Review r5 (sol): a timing that TOOK the slot waits for a build; a
+///   token-sharing timing is refused at once (TLS-135 r8), and the taker,
+///   refused for its build, frees the slot.
 /// - A `run`'s hold is not released by `release`: it ends with the run.
 ///
 /// Mutations (2026-11-19): the hold probe after the drain dropped -> the
 /// released hold's timing starts (red); the `timed_now` check dropped from
 /// `acquire` -> B takes the slot beside the timing (red); `refuse` ending
-/// every timing keeper instead of its own -> the retry's timing ends (red).
+/// every timing keeper instead of its own -> the retry's timing ends (red; a
+/// break that needs two timings at once, which TLS-135 r8 no longer allows).
 /// Each restored, green. (2026-11-18): the refused acquire's keeper end
-/// dropped -> the slot stays held (red).
+/// dropped -> the slot stays held (red). (TLS-135 r8) the gate's check
+/// dropped -> the second timing beside the first exits 4 (red). (TLS-135 r10)
+/// the binding owner dropped from `timing_scan` -> the retry bound to the same
+/// process is refused as foreign (exit 6, red); restored, green.
 #[test]
 fn cdo_slot_timings_in_a_hand_hold() {
     let s = Slot::new();
@@ -2982,7 +3015,8 @@ fn cdo_slot_timings_in_a_hand_hold() {
         s.probe() == "held=1 own=0 timed=0"
     });
 
-    // Two timings: the second waits for a build too, and keeps its own.
+    // One timing at a time (TLS-135 review r8): a second one is refused at
+    // once while the first runs, and starts once it ended.
     let t1 = sleeper();
     let t2 = sleeper();
     let (t1pid, t2pid) = (t1.id().to_string(), t2.id().to_string());
@@ -2992,33 +3026,30 @@ fn cdo_slot_timings_in_a_hand_hold() {
         &[names],
     );
     assert_eq!(code, Some(4), "{text}");
-    let b2 = build();
     let (code, text) = s.run(
         "A",
         &["acquire", "lane", "second", "--bind", &t2pid, "--timed"],
-        &[names, ("CDO_SLOT_TIMED_WAIT_S", "2")],
+        &[names],
     );
-    assert_eq!(
-        code,
-        Some(6),
-        "the second timing started beside a build: {text}"
+    assert_eq!(code, Some(6), "a second timing beside the first: {text}");
+    assert!(
+        text.contains("refused: another timing runs in this slot"),
+        "{text}"
     );
-    drop(b2);
+    assert!(
+        timed_line().contains("(first)"),
+        "the refusal ended the first"
+    );
+    drop(t1);
+    until("the first timing ended", &|| {
+        s.probe() == "held=1 own=0 timed=0"
+    });
     let (code, text) = s.run(
         "A",
         &["acquire", "lane", "second", "--bind", &t2pid, "--timed"],
         &[names],
     );
     assert_eq!(code, Some(4), "{text}");
-    drop(t1);
-    until("only the second timing left", &|| {
-        let t = timed_line();
-        t.contains("(second)") && !t.contains("(first)")
-    });
-    assert!(
-        s.probe().ends_with("timed=1"),
-        "the second timing lost its cover"
-    );
     drop(t2);
     until("no timing", &|| s.probe() == "held=1 own=0 timed=0");
     assert_eq!(s.run("A", &["release"], &[]).0, Some(0));
@@ -3089,8 +3120,8 @@ fn cdo_slot_timings_in_a_hand_hold() {
     assert_eq!(s.run("B", &["release"], &[]).0, Some(0));
     drop(t5);
 
-    // A refused retry bound to the same process leaves the first timing on;
-    // so does one that refuses while the retry starts (the hook pauses it).
+    // A retry bound to the same process (its owner by binding) takes no second
+    // timing and leaves the first on: "already timed", a duplicate.
     assert_eq!(s.run("A", &["acquire", "lane", "by hand"], &[]).0, Some(0));
     let t7 = sleeper();
     let t7pid = t7.id().to_string();
@@ -3100,36 +3131,28 @@ fn cdo_slot_timings_in_a_hand_hold() {
         &[names],
     );
     assert_eq!(code, Some(4), "{text}");
-    let b6 = build();
-    let mut first = s.bg(
-        "A",
-        &["acquire", "lane", "refused", "--bind", &t7pid, "--timed"],
-        &[
-            names,
-            ("CDO_SLOT_TIMED_WAIT_S", "1"),
-            ("CDO_SLOT_TEST_PAUSE_REFUSE_S", "60"),
-        ],
-    );
-    s.wait_paused();
-    drop(b6);
     let (code, text) = s.run(
         "A",
-        &["acquire", "lane", "retry", "--bind", &t7pid, "--timed"],
+        &["acquire", "lane", "refused", "--bind", &t7pid, "--timed"],
         &[names],
     );
     assert_eq!(code, Some(4), "{text}");
-    s.resume();
-    assert_eq!(first.0.wait().unwrap().code(), Some(6));
+    assert!(
+        text.contains("already timed") && text.contains("a duplicate request"),
+        "{text}"
+    );
     let text = timed_line();
     assert!(
-        text.contains("timed by lane since") && !text.contains("(refused)"),
+        text.contains("(kept)") && !text.contains("(refused)"),
         "{text}"
     );
     drop(t7);
     until("no timing", &|| s.probe() == "held=1 own=0 timed=0");
     assert_eq!(s.run("A", &["release"], &[]).0, Some(0));
 
-    // A timing that TOOK the slot is refused while a token-sharing timing runs.
+    // A timing that TOOK the slot and waits for a build: a token-sharing
+    // timing is refused at once (one timing at a time), and the taker, refused
+    // for its build, frees the slot.
     let t11 = sleeper();
     let t12 = sleeper();
     let (t11pid, t12pid) = (t11.id().to_string(), t12.id().to_string());
@@ -3145,19 +3168,15 @@ fn cdo_slot_timings_in_a_hand_hold() {
         ],
     );
     s.wait_paused();
-    drop(b11);
     let (code, text) = s.run(
         "A",
         &["acquire", "lane", "sharer", "--bind", &t12pid, "--timed"],
         &[names, ("CDO_SLOT_TOKEN", "tls89-shared")],
     );
-    assert_eq!(code, Some(4), "{text}");
+    assert_eq!(code, Some(6), "{text}");
+    drop(b11);
     s.resume();
     assert_eq!(taker.0.wait().unwrap().code(), Some(6));
-    assert!(
-        s.probe().ends_with("timed=1") && timed_line().contains("(sharer)"),
-        "the refused taker ended the sharer's timing"
-    );
     drop(t12);
     drop(t11);
     until("free", &|| s.probe() == "held=0 own=0 timed=0");
@@ -3472,4 +3491,3197 @@ fn cdo_slot_works_in_a_folder_an_older_version_left() {
     assert!(text.contains("cannot make the folders"), "{text}");
     assert_eq!(s.probe(), "held=1 own=0 timed=0", "nothing timed");
     assert_eq!(s.run("A", &["release"], &[]).0, Some(0));
+}
+
+/// ⟨TLS-135⟩ A folder of links to the real gate scripts, with `ci-steps` linked
+/// under a name no real process has (`ci-steps-t135-<pid>-<n>`, for
+/// CDO_SLOT_BUILD_SCRIPTS), and a stub `cargo` first on PATH. The stub appends
+/// `beside` to `<tmp>/cargo-log` while a timing of the test runs (`<tmp>/on`
+/// exists, `<tmp>/off` does not), else `after`; with TLS135_LEAK set it also
+/// leaves a `sleep 600` behind (an orphan once the gate ends); with TLS135_HOLD
+/// set, `cargo fmt` (or `cargo <TLS135_HOLD_CMD>`) touches `<tmp>/<cmd>-running`
+/// and waits until that file exists. Stub `tree-stamp`, `nextest-priority-check`, `python3` and
+/// `check-ir-image` let `ci-steps task` and `all` run. Returns (folder, script
+/// name).
+fn gate_folder(s: &Slot) -> (std::path::PathBuf, String) {
+    use std::os::unix::fs::PermissionsExt;
+    let bin = s.0.path().join("gate");
+    std::fs::create_dir_all(&bin).unwrap();
+    let real = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("scripts");
+    // One name per folder: tests run side by side in one process, and a
+    // timing's drain must not count another test's gate as its build.
+    static NEXT: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+    let n = NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    let name = format!("ci-steps-t135-{}-{n}", std::process::id());
+    std::os::unix::fs::symlink(real.join("ci-steps"), bin.join(&name)).unwrap();
+    for f in [
+        "cdo-slot",
+        "awake-clock",
+        "host-suspended",
+        "build-entry",
+        "check-goldens",
+        "require-rttime",
+    ] {
+        std::os::unix::fs::symlink(real.join(f), bin.join(f)).unwrap();
+    }
+    let t = s.0.path().display().to_string();
+    let cargo = bin.join("cargo");
+    std::fs::write(
+        &cargo,
+        format!(
+            "#!/bin/bash\n[ \"$2\" = --version ] && exit 0\n\
+             if [ -n \"$TLS135_HOLD\" ] && [ \"$1\" = \"${{TLS135_HOLD_CMD:-fmt}}\" ]; then touch {t}/$1-running; while [ ! -e \"$TLS135_HOLD\" ]; do sleep 0.05; done; fi\n\
+             if [ -e {t}/on ] && [ ! -e {t}/off ]; then echo beside; else echo after; fi >>{t}/cargo-log\n\
+             [ -z \"$TLS135_LEAK\" ] || (sleep 600 </dev/null >/dev/null 2>&1 &)\n"
+        ),
+    )
+    .unwrap();
+    std::fs::set_permissions(&cargo, std::fs::Permissions::from_mode(0o755)).unwrap();
+    for (f, body) in [
+        (
+            "tree-stamp",
+            format!("[ \"$1\" = --path ] && echo {t}/stamp || echo stamp"),
+        ),
+        ("nextest-priority-check", "exit 0".to_string()),
+        // `ci-steps all`'s agentflow step (pytest) and build check.
+        ("python3", "exit 0".to_string()),
+        ("check-ir-image", "exit 0".to_string()),
+    ] {
+        std::fs::write(bin.join(f), format!("#!/bin/bash\n{body}\n")).unwrap();
+        std::fs::set_permissions(bin.join(f), std::fs::Permissions::from_mode(0o755)).unwrap();
+    }
+    (bin, name)
+}
+
+/// A new, empty log file opened for appending: stdout and an appending stderr
+/// on the same file then never write over each other.
+fn log_file(p: &std::path::Path) -> std::fs::File {
+    std::fs::File::create(p).unwrap();
+    std::fs::OpenOptions::new().append(true).open(p).unwrap()
+}
+
+/// `<wrap...> bash <gate>/<script> fmt` (its `cargo fmt` is the stub) as a
+/// command of slot `s`, with BASE_ENV, the stub first on PATH, then `env`.
+/// `script` may carry its own arguments after a space (`check-goldens --regen`);
+/// then no `fmt` is added.
+fn gate_cmd(
+    s: &Slot,
+    gate: &std::path::Path,
+    script: &str,
+    wrap: &[&std::ffi::OsStr],
+    env: &[(&str, &str)],
+) -> std::process::Command {
+    let bash: &std::ffi::OsStr = "bash".as_ref();
+    let (prog, pre) = wrap.split_first().unwrap_or((&bash, &[]));
+    let mut cmd = scrubbed(std::process::Command::new(prog));
+    cmd.args(pre);
+    if !wrap.is_empty() {
+        cmd.arg("bash");
+    }
+    let path = format!(
+        "{}:{}",
+        gate.display(),
+        std::env::var("PATH").unwrap_or_default()
+    );
+    let mut words = script.split(' ');
+    cmd.arg(gate.join(words.next().unwrap()));
+    let rest: Vec<&str> = words.collect();
+    cmd.args(if rest.is_empty() { vec!["fmt"] } else { rest })
+        .env("PATH", path)
+        .env("CDO_SLOT_DIR", s.dir());
+    for (k, v) in BASE_ENV.iter().chain(env) {
+        cmd.env(k, v);
+    }
+    cmd
+}
+
+/// A timing of slot `s` by `run --timed` as session A: it touches `<tmp>/on`,
+/// waits until `<tmp>/end` exists, then touches `<tmp>/off`.
+fn test_timing(s: &Slot, env: &[(&str, &str)]) -> Reap {
+    let t = s.0.path().display().to_string();
+    let body = format!("touch {t}/on; while [ ! -e {t}/end ]; do sleep 0.05; done; touch {t}/off");
+    s.bg(
+        "A",
+        &[
+            "run", "lane", "timing", "--timed", "--", "bash", "-c", &body,
+        ],
+        env,
+    )
+}
+
+/// ⟨TLS-135⟩ The landing that failed on 2026-11-25: a gate queued behind a lock
+/// (`flock <lock> bash scripts/ci-steps ...`) before a timed hold began passed
+/// the guard then, and started its build when the lock came free, in the middle
+/// of the timing. Now ci-steps (and check-goldens) check at their own start and
+/// wait for the timing to end, saying so; the wait is bounded and refuses.
+///
+/// Reproduction and mutation (2026-11-25): `build_entry ci-steps` commented out
+/// in ci-steps (the master behaviour) -> "the queued gate built beside the
+/// timing", cargo-log `beside` (red); restored, green.
+#[test]
+fn cdo_slot_a_gate_queued_before_a_timing_waits_for_it() {
+    let s = Slot::new();
+    let (gate, script) = gate_folder(&s);
+    let t = s.0.path();
+    let lock = t.join("task-gate.lock");
+    let log = t.join("gate.log");
+    let cargo_log = || std::fs::read_to_string(t.join("cargo-log")).unwrap_or_default();
+    let log_has = |w: &str| {
+        std::fs::read_to_string(&log)
+            .unwrap_or_default()
+            .contains(w)
+    };
+
+    // The earlier gate holds the lock; ours queues behind it.
+    let release = t.join("release");
+    let body = format!("while [ ! -e {} ]; do sleep 0.05; done", release.display());
+    let _earlier = stand_in(
+        &s,
+        "flock",
+        &[
+            lock.as_os_str(),
+            "bash".as_ref(),
+            "-c".as_ref(),
+            body.as_ref(),
+        ],
+    );
+    until("the earlier gate holds the lock", &|| {
+        !std::process::Command::new("flock")
+            .args(["-n".as_ref(), lock.as_os_str(), "true".as_ref()])
+            .status()
+            .unwrap()
+            .success()
+    });
+    let mut queued = Reap(
+        gate_cmd(
+            &s,
+            &gate,
+            &script,
+            &["flock".as_ref(), lock.as_os_str()],
+            &[],
+        )
+        .stdout(log_file(&log))
+        .stderr(std::process::Stdio::null())
+        .spawn()
+        .unwrap(),
+    );
+
+    let mut timing = test_timing(&s, &[]);
+    until("the timing runs", &|| t.join("on").exists());
+    std::fs::write(&release, "").unwrap();
+    until("the queued gate builds, or waits for the timing", &|| {
+        !cargo_log().is_empty() || log_has("waiting for the CDO timing to end")
+    });
+    assert_eq!(cargo_log(), "", "the queued gate built beside the timing");
+    std::fs::write(t.join("end"), "").unwrap();
+    assert_eq!(timing.wait().unwrap().code(), Some(0));
+    assert_eq!(queued.wait().unwrap().code(), Some(0));
+    assert_eq!(cargo_log(), "after\n");
+    assert!(log_has("the CDO timing ended"));
+}
+
+/// ⟨TLS-135⟩ What the entry check lets through, and its limit:
+/// - A gate run by the timing's own command builds at once (perf-bounds' and
+///   cdo-speed's builds run under their own timing).
+/// - A step of a recorded run (even a quiet one) is checked like any start
+///   (review r2, sol: the earlier "a run admits its steps" let a step launched
+///   beside a timing build); an inherited `build_entry_admitted` skips nothing.
+/// - Any other gate under a timing waits at most CDO_SLOT_ENTRY_WAIT_S, then
+///   refuses (exit 1) and builds nothing; check-goldens the same.
+///
+/// Mutations (2026-11-25), each red, restored, green: `foreign_timing`'s
+/// skip of its own line's timing dropped -> the timing's own gate exits 1;
+/// `build_entry` returning 0 on the wait's exit 6 -> ci-steps exits 0 and
+/// builds; check-goldens' `build_entry` before its run commented out -> it
+/// exits 0. (2026-11-26, review r1) its `--regen` guard commented out -> the
+/// regen builds (cargo-log `beside`). (review r2) the admission walk put back
+/// in `enter_check` (an ancestor with a live record admits) -> the run's step
+/// builds beside the timing; `build_entry`'s once-per-process check reading
+/// any value (`[ -n ... ]`) -> the step with an inherited value builds.
+#[test]
+fn cdo_slot_gate_entry_passes_its_own_line_and_refuses_after_its_wait() {
+    let s = Slot::new();
+    let (gate, script) = gate_folder(&s);
+    let t = s.0.path();
+    let cargo_log = || std::fs::read_to_string(t.join("cargo-log")).unwrap_or_default();
+    let path = format!(
+        "{}:{}",
+        gate.display(),
+        std::env::var("PATH").unwrap_or_default()
+    );
+    let gate_script = gate.join(&script).display().to_string();
+    let short = ("CDO_SLOT_ENTRY_WAIT_S", "1");
+
+    let (code, text) = s.run(
+        "A",
+        &[
+            "run",
+            "lane",
+            "own",
+            "--timed",
+            "--",
+            "bash",
+            &gate_script,
+            "fmt",
+        ],
+        &[("PATH", &path), short],
+    );
+    assert_eq!(code, Some(0), "the timing's own gate did not run: {text}");
+    assert!(!text.contains("waiting for the CDO timing"), "{text}");
+    assert_eq!(cargo_log(), "after\n");
+
+    let mut timing = test_timing(&s, &[]);
+    until("the timing runs", &|| t.join("on").exists());
+    // Review r2 (sol): no run admits its steps. The outer shell is a recorded,
+    // quiet entry (as `enter` and `build_step` leave it); its step checks for
+    // itself and waits (here: refuses after 1 s). And an inherited
+    // `build_entry_admitted` (not this process's) skips no check.
+    let nested = format!(
+        "{RECORD_SELF} bash '{SLOT}' quiet on; \
+         build_entry_admitted=1 bash '{gate_script}' fmt; rc=$?; exit $rc"
+    );
+    let out = {
+        let mut c = scrubbed(std::process::Command::new("bash"));
+        c.args(["-c", &nested])
+            .env("PATH", &path)
+            .env("CDO_SLOT_DIR", s.dir());
+        for (k, v) in BASE_ENV.iter().chain(&[short]) {
+            c.env(k, v);
+        }
+        c.output().unwrap()
+    };
+    let text =
+        String::from_utf8_lossy(&out.stdout).into_owned() + &String::from_utf8_lossy(&out.stderr);
+    assert_eq!(out.status.code(), Some(1), "a run's step: {text}");
+    assert_eq!(cargo_log(), "after\n", "a run's step built: {text}");
+
+    let out = gate_cmd(&s, &gate, &script, &[], &[short])
+        .output()
+        .unwrap();
+    let text =
+        String::from_utf8_lossy(&out.stdout).into_owned() + &String::from_utf8_lossy(&out.stderr);
+    assert_eq!(out.status.code(), Some(1), "{text}");
+    assert!(
+        text.contains("refused: a CDO timing still runs after 1 s"),
+        "{text}"
+    );
+    assert_eq!(cargo_log(), "after\n", "it built: {text}");
+    // check-goldens the same (its stamp skip off: it would build nothing).
+    let mut c = gate_cmd(&s, &gate, "check-goldens", &[], &[short]);
+    let out = c.env("CHECK_GOLDENS_FORCE", "1").output().unwrap();
+    let text =
+        String::from_utf8_lossy(&out.stdout).into_owned() + &String::from_utf8_lossy(&out.stderr);
+    assert_eq!(out.status.code(), Some(1), "{text}");
+    assert!(
+        text.contains("check-goldens: refused: a CDO timing still runs"),
+        "{text}"
+    );
+    assert_eq!(cargo_log(), "after\n", "check-goldens built: {text}");
+    // Its regen guard too (review r1, sol): `--regen` builds before the run's.
+    let out = gate_cmd(&s, &gate, "check-goldens --regen", &[], &[short])
+        .output()
+        .unwrap();
+    let text =
+        String::from_utf8_lossy(&out.stdout).into_owned() + &String::from_utf8_lossy(&out.stderr);
+    assert_eq!(out.status.code(), Some(1), "{text}");
+    assert!(
+        text.contains("check-goldens: refused: a CDO timing still runs"),
+        "{text}"
+    );
+    assert_eq!(
+        cargo_log(),
+        "after\n",
+        "check-goldens --regen built: {text}"
+    );
+    std::fs::write(t.join("end"), "").unwrap();
+    assert_eq!(timing.wait().unwrap().code(), Some(0));
+}
+
+/// Bash that records its own shell as a build entry, as `cdo-slot enter`
+/// writes it (`$CDO_SLOT_DIR/entries/<pid>.<start time>`).
+const RECORD_SELF: &str = "mkdir -p \"$CDO_SLOT_DIR/entries\"; \
+    st=$(awk '{print $22}' /proc/$$/stat); echo \"$$ $st\" >\"$CDO_SLOT_DIR/entries/$$.$st\";";
+
+/// ⟨TLS-135⟩ The check and a timed acquire cannot miss each other:
+/// - A gate that recorded itself and has not yet checked (the ENTER hook holds
+///   it there) when a timing begins is a build to that timing: it waits for
+///   it, by the record alone (no build name or script matches), and refuses
+///   at CDO_SLOT_TIMED_WAIT_S.
+/// - A gate parked in its wait (its record taken back) is no build to the
+///   timing it parks behind, still draining, though its script name is a build
+///   script there: counting it made the two wait on each other.
+///
+/// Mutations (2026-11-25), each red, restored, green: the entry records left
+/// out of `foreign_builds` -> the timing starts beside the paused gate (exit
+/// 0); `parked/` left out of its parked loop -> the timing is refused (exit
+/// 6); `enter_check` not taking its record back on exit 3 -> the parked
+/// gate's record refuses the timing (exit 6). (r8: re-proved on the drained
+/// timing, one timing at a time.) (2026-11-26, review r1,
+/// Fable) the order: the record written after the decision (the ENTER hook
+/// kept just before the write) -> the timing starts beside the paused gate
+/// (exit 0).
+#[test]
+fn cdo_slot_gate_entry_and_a_timing_never_miss_each_other() {
+    let s = Slot::new();
+    let (gate, script) = gate_folder(&s);
+    let t = s.0.path();
+    let log = t.join("gate.log");
+    let log_has = |w: &str| {
+        std::fs::read_to_string(&log)
+            .unwrap_or_default()
+            .contains(w)
+    };
+
+    let mut early = Reap(
+        gate_cmd(
+            &s,
+            &gate,
+            &script,
+            &[],
+            &[("CDO_SLOT_TEST_PAUSE_ENTER_S", "60")],
+        )
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .spawn()
+        .unwrap(),
+    );
+    s.wait_paused();
+    let (code, text) = s.run(
+        "A",
+        &["run", "lane", "timing", "--timed", "--", "true"],
+        &[("CDO_SLOT_TIMED_WAIT_S", "2")],
+    );
+    assert_eq!(code, Some(6), "the timing started beside a gate: {text}");
+    assert!(
+        text.contains(&format!("PID {} (entry)", early.id())),
+        "{text}"
+    );
+    s.resume();
+    assert_eq!(early.wait().unwrap().code(), Some(0));
+
+    // A timing drains (it waits for a stand-in build); a gate that starts then
+    // sees the published timing and parks behind it. The drain must not count
+    // the parked gate (its script name is a build script here), or the two
+    // wait on each other. (One timing at a time, TLS-135 r8: the parked gate is
+    // met by the timing it parks behind, not by a second timing.)
+    let fake_name = format!("t135p{}", std::process::id());
+    let fake = s.0.path().join(&fake_name);
+    std::os::unix::fs::symlink("/bin/bash", &fake).unwrap();
+    let build = stand_in(&s, &fake, &["-c".as_ref(), "sleep 600; true".as_ref()]);
+    assert_eq!(s.run("A", &["acquire", "lane", "by hand"], &[]).0, Some(0));
+    let t1 = sleeper();
+    let t1pid = t1.id().to_string();
+    let mut timing = s.bg(
+        "A",
+        &["acquire", "lane", "first", "--bind", &t1pid, "--timed"],
+        &[
+            ("CDO_SLOT_BUILD_NAMES", fake_name.as_str()),
+            ("CDO_SLOT_BUILD_SCRIPTS", script.as_str()),
+            ("CDO_SLOT_TIMED_WAIT_S", "20"),
+        ],
+    );
+    until("the timing is published", &|| {
+        s.run("probe", &["status"], &[]).1.contains("(first)")
+    });
+    let mut parked = Reap(
+        gate_cmd(&s, &gate, &script, &[], &[])
+            .stdout(log_file(&log))
+            .stderr(std::process::Stdio::null())
+            .spawn()
+            .unwrap(),
+    );
+    until("the gate waits", &|| {
+        log_has("waiting for the CDO timing to end")
+    });
+    drop(build);
+    assert_eq!(
+        timing.0.wait().unwrap().code(),
+        Some(4),
+        "the parked gate held up the timing"
+    );
+    drop(t1);
+    assert_eq!(parked.wait().unwrap().code(), Some(0));
+    assert!(log_has("the CDO timing ended"));
+    assert_eq!(s.run("A", &["release"], &[]).0, Some(0));
+}
+
+/// ⟨TLS-135, the orchestrator's review of the first design⟩ A finished gate
+/// that left a child behind (an orphan with the gate's environment and open
+/// descriptors) holds no timing up: only the live entry process counts. The
+/// first design counted every holder of an inherited `building` descriptor, so
+/// such an orphan stalled a timing for CDO_SLOT_TIMED_WAIT_S. And a record whose
+/// PID now names another process (its start time differs) is no entry.
+///
+/// Mutations (2026-11-25), each red, restored, green: the first design's
+/// scripts (447eef658's cdo-slot and build-entry) -> the orphan refuses the
+/// timing (exit 6); the record's start-time check dropped from
+/// `foreign_builds` -> the reused-PID record refuses the timing (exit 6).
+/// (2026-11-26, review r1, sol) a dead record's cleanup removing every
+/// record of its PID (`entries/<pid>.*`) -> the live record is gone and the
+/// timing starts (exit 0).
+#[test]
+fn cdo_slot_a_finished_gates_orphan_holds_no_timing_up() {
+    let s = Slot::new();
+    let (gate, script) = gate_folder(&s);
+    let mut leaky = gate_cmd(&s, &gate, &script, &[], &[("TLS135_LEAK", "1")]);
+    let gate_run = leaky
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .spawn()
+        .unwrap();
+    assert!(Reap(gate_run).wait().unwrap().success());
+    let want = format!("CDO_SLOT_DIR={}", s.dir().display());
+    let orphan = std::fs::read_dir("/proc")
+        .unwrap()
+        .flatten()
+        .filter_map(|e| e.file_name().to_string_lossy().parse::<u32>().ok())
+        .find(|p| {
+            let comm = std::fs::read_to_string(format!("/proc/{p}/comm")).unwrap_or_default();
+            let env = std::fs::read(format!("/proc/{p}/environ")).unwrap_or_default();
+            comm.trim() == "sleep" && env.split(|b| *b == 0).any(|v| v == want.as_bytes())
+        });
+    assert!(orphan.is_some(), "precondition: the gate left an orphan");
+    let (code, text) = s.run(
+        "A",
+        &["run", "lane", "after", "--timed", "--", "true"],
+        &[("CDO_SLOT_TIMED_WAIT_S", "2")],
+    );
+    assert_eq!(
+        code,
+        Some(0),
+        "a finished gate's orphan held up a timing: {text}"
+    );
+
+    // A record naming a live process that is not the entry it recorded.
+    let other = sleeper();
+    let entries = s.dir().join("entries");
+    std::fs::create_dir_all(&entries).unwrap();
+    let stale = entries.join(format!("{}.1", other.id()));
+    std::fs::write(&stale, format!("{} 1\n", other.id())).unwrap();
+    let (code, text) = s.run(
+        "A",
+        &["run", "lane", "reused", "--timed", "--", "true"],
+        &[("CDO_SLOT_TIMED_WAIT_S", "2")],
+    );
+    assert_eq!(
+        code,
+        Some(0),
+        "a reused PID's record held up a timing: {text}"
+    );
+
+    // Review r1 (sol): removing the stale record leaves the live record of the
+    // same PID (its own generation) in place, and that one still counts.
+    std::fs::write(&stale, format!("{} 1\n", other.id())).unwrap();
+    let stat = std::fs::read_to_string(format!("/proc/{}/stat", other.id())).unwrap();
+    let start = stat
+        .rsplit_once(") ")
+        .unwrap()
+        .1
+        .split(' ')
+        .nth(19)
+        .unwrap()
+        .to_string();
+    let live = entries.join(format!("{}.{start}", other.id()));
+    std::fs::write(&live, format!("{} {start}\n", other.id())).unwrap();
+    let (code, text) = s.run(
+        "A",
+        &["run", "lane", "live", "--timed", "--", "true"],
+        &[("CDO_SLOT_TIMED_WAIT_S", "1")],
+    );
+    assert_eq!(code, Some(6), "the live record did not count: {text}");
+    assert!(
+        text.contains(&format!("PID {} (entry)", other.id())),
+        "{text}"
+    );
+    assert!(!stale.exists(), "the stale record stayed");
+    assert!(
+        live.exists(),
+        "the stale record's cleanup took the live one"
+    );
+}
+
+/// ⟨TLS-135 review r1, sol and Fable⟩ TLS-108's deadlock by the record: a
+/// lane's real `ci-steps perf-bounds` (a stand-in test binary, no build) is
+/// admitted while a landing holds the slot, records itself, and queues for the
+/// slot. The landing's timed acquire must not wait for it (the gate waits for
+/// the landing's slot): the step is quiet while it waits (`build_step` around
+/// its acquire). The same for a run that runs `perf-bounds` as a step (`ci-steps
+/// all`; review r2, Fable): quiet while its step runs. And quiet is a state an
+/// entry enters, never one read from the process tree (review r2, sol): an
+/// entry whose waiter runs in the background is free to run on and stays a
+/// build.
+///
+/// Mutations (2026-11-26), each red, restored, green: `build_step` around
+/// perf-bounds' acquire replaced by a plain call -> the landing's timing is
+/// refused, exit 6; `build_step` running its step without `quiet on` -> the
+/// first timing is refused, exit 6 (that one break covers both the step's
+/// acquire and the nested run's step: they share `build_step`, so the nested
+/// part has no break of its own); `foreign_builds` skipping every
+/// entry that is an ancestor of a waiter (r1's rule without its quiescence
+/// test) -> the background waiter's entry is not counted (exit 4).
+#[test]
+fn cdo_slot_a_queued_entry_does_not_hold_up_the_timing_it_waits_for() {
+    use std::os::unix::fs::PermissionsExt;
+    let s = Slot::new();
+    let (gate, script) = gate_folder(&s);
+    let t = s.0.path();
+    let src = std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/tests/perf_bounds.rs"))
+        .unwrap();
+    let declared = src
+        .split_once("\nmod release_checks")
+        .unwrap()
+        .1
+        .lines()
+        .filter(|l| l.trim() == "#[test]")
+        .count();
+    let bin = t.join("perf-bounds-stand-in");
+    std::fs::write(
+        &bin,
+        format!(
+            "#!/usr/bin/env bash\n\
+             if [ \"$1\" = --list ]; then\n\
+             case \" $* \" in *\" --ignored \"*) exit 0 ;; esac\n\
+             for ((i = 0; i < {declared}; i++)); do echo \"release_checks::t$i: test\"; done; exit 0\n\
+             fi\nexit 0\n"
+        ),
+    )
+    .unwrap();
+    std::fs::set_permissions(&bin, std::fs::Permissions::from_mode(0o755)).unwrap();
+    let token = ("CDO_SLOT_TOKEN", "tls135-land");
+    let holder = sleeper();
+    let hpid = holder.id().to_string();
+    let (code, text) = s.run(
+        "L",
+        &["acquire", "land", "landing", "--bind", &hpid],
+        &[token],
+    );
+    assert_eq!(code, Some(0), "{text}");
+
+    let queue = s.dir().join("queue");
+    let queued = || {
+        std::fs::read_dir(&queue)
+            .map(|d| d.flatten().count())
+            .unwrap_or(0)
+    };
+    let bin_s = bin.display().to_string();
+    // Ended with the slot folder's processes when the test ends.
+    let _lane = Reap(
+        gate_cmd(
+            &s,
+            &gate,
+            &format!("{script} perf-bounds"),
+            &[],
+            &[("CI_STEPS_PERF_BOUNDS_BIN", bin_s.as_str())],
+        )
+        .current_dir(env!("CARGO_MANIFEST_DIR"))
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .spawn()
+        .unwrap(),
+    );
+    until("the lane's perf-bounds queues for the slot", &|| {
+        queued() == 1
+    });
+    let t1 = sleeper();
+    let t1pid = t1.id().to_string();
+    let (code, text) = s.run(
+        "L",
+        &["acquire", "land", "timing", "--bind", &t1pid, "--timed"],
+        &[
+            token,
+            ("CDO_SLOT_BUILD_SCRIPTS", script.as_str()),
+            ("CDO_SLOT_TIMED_WAIT_S", "3"),
+        ],
+    );
+    assert_eq!(
+        code,
+        Some(4),
+        "the queued gate held up the landing's timing: {text}"
+    );
+    drop(t1);
+    until("the landing's timing ended", &|| {
+        s.probe().ends_with("timed=0")
+    });
+
+    // The nested path (review r2, Fable): a run that runs `perf-bounds` as a
+    // step (`ci-steps all`), through the real build_entry and build_step.
+    let entry_lib = concat!(env!("CARGO_MANIFEST_DIR"), "/scripts/build-entry");
+    let gate_script = gate.join(&script).display().to_string();
+    let parent = format!(
+        "source '{entry_lib}'; build_entry all || exit 9; \
+         build_step bash '{gate_script}' perf-bounds; exit $?"
+    );
+    let probe_env = gate_cmd(
+        &s,
+        &gate,
+        &script,
+        &[],
+        &[("CI_STEPS_PERF_BOUNDS_BIN", bin_s.as_str())],
+    );
+    let mut nested = scrubbed(std::process::Command::new("bash"));
+    nested
+        .args(["-c", &parent])
+        .current_dir(env!("CARGO_MANIFEST_DIR"));
+    for (k, v) in probe_env.get_envs() {
+        if let Some(v) = v {
+            nested.env(k, v);
+        }
+    }
+    let _nested = Reap(
+        nested
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .spawn()
+            .unwrap(),
+    );
+    until("the nested perf-bounds queues", &|| queued() == 2);
+    let tn = sleeper();
+    let tnpid = tn.id().to_string();
+    let (code, text) = s.run(
+        "L",
+        &["acquire", "land", "timing-n", "--bind", &tnpid, "--timed"],
+        &[
+            token,
+            ("CDO_SLOT_BUILD_SCRIPTS", script.as_str()),
+            ("CDO_SLOT_TIMED_WAIT_S", "3"),
+        ],
+    );
+    assert_eq!(
+        code,
+        Some(4),
+        "the nested run's queued step held up the landing's timing: {text}"
+    );
+    drop(tn);
+    until("the landing's timing ended", &|| {
+        s.probe().ends_with("timed=0")
+    });
+
+    // Review r2 (sol): an entry whose waiter runs in the background is free to
+    // run on; it did not say quiet, so it stays a build.
+    let slot = SLOT;
+    let body = format!(
+        "{RECORD_SELF} bash '{slot}' acquire lane queued --wait --bind $$ & sleep 600; wait"
+    );
+    let _branchy = stand_in(&s, "bash", &["-c".as_ref(), body.as_ref()]);
+    until("the third entry queues", &|| queued() == 3);
+    let t2 = sleeper();
+    let t2pid = t2.id().to_string();
+    let (code, text) = s.run(
+        "L",
+        &["acquire", "land", "timing2", "--bind", &t2pid, "--timed"],
+        &[token, ("CDO_SLOT_TIMED_WAIT_S", "2")],
+    );
+    assert_eq!(
+        code,
+        Some(6),
+        "an entry with a step beside its waiter was not counted: {text}"
+    );
+    assert!(text.contains("(entry)"), "{text}");
+    drop(t2);
+}
+
+/// ⟨TLS-135 review r1, sol⟩ An ancestor that a running timing does not count
+/// (it is that timing's own ancestor) admits no new step: a gate its recorded
+/// entry launches beside the timing, after the timer's scan, must check like
+/// a new run, and waits (here: refuses after its 1 s). Review r2 (sol): the
+/// same for a quiet entry a timing skipped: a step it launches after the
+/// timing began checks for itself.
+///
+/// Mutations (2026-11-26), each red, restored, green: (r1) the walk in
+/// `enter_check` no longer stopping at a timing's own line -> the gate is
+/// admitted and builds beside the timing. (r2, no run admits its steps any
+/// more) an admission walk put back in `enter_check` (an ancestor with a live
+/// record admits) -> the first gate builds beside its timing (the second part
+/// is not reached; the same break, so no separate proof).
+#[test]
+fn cdo_slot_a_timers_own_ancestor_admits_no_step_beside_it() {
+    let s = Slot::new();
+    let (gate, script) = gate_folder(&s);
+    let t = s.0.path();
+    let cargo_log = || std::fs::read_to_string(t.join("cargo-log")).unwrap_or_default();
+    let gate_script = gate.join(&script).display().to_string();
+    let td = t.display().to_string();
+    let body = format!(
+        "{RECORD_SELF} \
+         bash '{SLOT}' run lane timing --timed -- bash -c 'touch {td}/on; while [ ! -e {td}/end ]; do sleep 0.05; done; touch {td}/off' & \
+         until [ -e {td}/on ]; do sleep 0.05; done; \
+         bash '{gate_script}' fmt; echo $? >{td}/gate-rc; touch {td}/end; wait"
+    );
+    let out = gate_cmd(&s, &gate, &script, &[], &[("CDO_SLOT_ENTRY_WAIT_S", "1")]);
+    let mut c = scrubbed(std::process::Command::new("bash"));
+    c.args(["-c", &body]);
+    for (k, v) in out.get_envs() {
+        if let Some(v) = v {
+            c.env(k, v);
+        }
+    }
+    let out = c.output().unwrap();
+    let text =
+        String::from_utf8_lossy(&out.stdout).into_owned() + &String::from_utf8_lossy(&out.stderr);
+    let rc = std::fs::read_to_string(t.join("gate-rc")).unwrap_or_default();
+    assert_eq!(rc.trim(), "1", "the gate beside the timing: {text}");
+    assert_eq!(cargo_log(), "", "it built beside the timing: {text}");
+    for f in ["on", "off", "end"] {
+        let _ = std::fs::remove_file(t.join(f));
+    }
+
+    // A quiet entry the timing skipped launches a gate after the timing began.
+    let body = format!(
+        "{RECORD_SELF} bash '{SLOT}' quiet on || exit 9; touch {td}/quiet; \
+         until [ -e {td}/on ]; do sleep 0.05; done; \
+         bash '{gate_script}' fmt; echo $? >{td}/gate-rc2"
+    );
+    let env = gate_cmd(&s, &gate, &script, &[], &[("CDO_SLOT_ENTRY_WAIT_S", "1")]);
+    let mut c = scrubbed(std::process::Command::new("bash"));
+    c.args(["-c", &body]);
+    for (k, v) in env.get_envs() {
+        if let Some(v) = v {
+            c.env(k, v);
+        }
+    }
+    let mut quiet = Reap(
+        c.stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .spawn()
+            .unwrap(),
+    );
+    until("the entry is quiet", &|| t.join("quiet").exists());
+    let mut timing = test_timing(&s, &[]);
+    until("the timing runs beside the quiet entry", &|| {
+        t.join("on").exists()
+    });
+    assert!(quiet.wait().unwrap().success());
+    let rc = std::fs::read_to_string(t.join("gate-rc2")).unwrap_or_default();
+    assert_eq!(rc.trim(), "1", "the quiet entry's new step");
+    assert_eq!(cargo_log(), "", "the quiet entry's new step built");
+    std::fs::write(t.join("end"), "").unwrap();
+    assert_eq!(timing.wait().unwrap().code(), Some(0));
+}
+
+/// ⟨TLS-135 review r1, sol⟩ The wait is one deadline per gate: when one timing
+/// ends and another begins before the gate's next decision, the gate's second
+/// round counts from the first round's start, not from zero. And no sleep
+/// passes the deadline (a 15 s poll does not stretch a 1 s wait).
+///
+/// Mutations (2026-11-26), each red, restored, green: `awake_start` moved into
+/// `enter_wait`'s round loop -> the gate waits its whole 8 s again after the
+/// second timing begins; the nap no longer capped to the time left -> the 1 s
+/// wait takes its 15 s poll.
+#[test]
+fn cdo_slot_gate_entry_waits_one_deadline_in_all() {
+    let s = Slot::new();
+    let (gate, script) = gate_folder(&s);
+    let t = s.0.path();
+    let log = t.join("gate.log");
+    let log_has = |w: &str| {
+        std::fs::read_to_string(&log)
+            .unwrap_or_default()
+            .contains(w)
+    };
+
+    // No sleep past the deadline.
+    let mut timing = test_timing(&s, &[]);
+    until("the timing runs", &|| t.join("on").exists());
+    let started = std::time::Instant::now();
+    let out = gate_cmd(
+        &s,
+        &gate,
+        &script,
+        &[],
+        &[("CDO_SLOT_ENTRY_WAIT_S", "1"), ("CDO_SLOT_POLL_S", "15")],
+    )
+    .output()
+    .unwrap();
+    assert_eq!(out.status.code(), Some(1));
+    assert!(
+        started.elapsed() < std::time::Duration::from_secs(10),
+        "the wait slept past its deadline: {:?}",
+        started.elapsed()
+    );
+    std::fs::write(t.join("end"), "").unwrap();
+    assert_eq!(timing.wait().unwrap().code(), Some(0));
+    for f in ["on", "off", "end"] {
+        std::fs::remove_file(t.join(f)).unwrap();
+    }
+
+    // Timing A, the gate waits; A ends, and at the gate's next decision (the
+    // ENTER hook holds it there) timing B begins.
+    let mut a = test_timing(&s, &[]);
+    until("timing A runs", &|| t.join("on").exists());
+    let mut g = Reap(
+        gate_cmd(
+            &s,
+            &gate,
+            &script,
+            &[],
+            &[
+                ("CDO_SLOT_ENTRY_WAIT_S", "8"),
+                ("CDO_SLOT_TEST_PAUSE_ENTER_S", "60"),
+            ],
+        )
+        .stdout(log_file(&log))
+        .stderr(std::fs::OpenOptions::new().append(true).open(&log).unwrap())
+        .spawn()
+        .unwrap(),
+    );
+    s.wait_paused();
+    s.resume();
+    until("the gate waits", &|| {
+        log_has("waiting for the CDO timing to end")
+    });
+    std::thread::sleep(std::time::Duration::from_millis(2500));
+    std::fs::write(t.join("end"), "").unwrap();
+    assert_eq!(a.wait().unwrap().code(), Some(0));
+    let gid = g.id();
+    until("the gate's next decision is held", &|| {
+        let stat = std::fs::read_to_string(format!("/proc/{gid}/stat")).unwrap_or_default();
+        if stat
+            .rsplit_once(") ")
+            .is_none_or(|(_, r)| r.starts_with('Z'))
+        {
+            panic!(
+                "the gate ended before its next decision: {}",
+                std::fs::read_to_string(&log).unwrap_or_default()
+            );
+        }
+        std::fs::read_dir(s.dir())
+            .unwrap()
+            .flatten()
+            .any(|e| e.file_name().to_string_lossy().starts_with("paused."))
+    });
+    s.wait_paused();
+    // B's timing lock is taken at once; its build wait then sees the gate's
+    // record until the gate parks again.
+    let _b = s.bg(
+        "A",
+        &["run", "lane", "b", "--timed", "--", "sleep", "600"],
+        &[],
+    );
+    until("timing B begins", &|| {
+        s.run("probe", &["status"], &[])
+            .1
+            .contains("timed by lane since")
+    });
+    let resumed = std::time::Instant::now();
+    s.resume();
+    assert_eq!(g.wait().unwrap().code(), Some(1), "the gate under timing B");
+    assert!(
+        resumed.elapsed() < std::time::Duration::from_millis(6500),
+        "the second round waited from zero: {:?}",
+        resumed.elapsed()
+    );
+}
+
+/// ⟨TLS-135 review r1, sol⟩ What the entry check cannot check, it refuses:
+/// - A record that cannot be made (here `entries` is a file) is no admission
+///   on a host that can hold the slot: exit 1, nothing built.
+/// - A timing whose file names an ancestor of the gate, but with another start
+///   time (the PID now names another process), is not the gate's own: the
+///   gate waits, here refusing after 1 s.
+///
+/// Mutations (2026-11-26), each red, restored, green: `enter_check` returning 0
+/// where its record cannot be made -> the gate builds; `build_entry` going on
+/// after an `enter` error -> the gate builds; `foreign_timing`'s start-time
+/// comparison dropped -> the gate takes the timing as its own and builds.
+/// (Since TLS-135 r13 the record carries `kept=1` and its lock's real key, so
+/// the case reaches the binding rule's start-time check in `scan_once`; a
+/// record with no key is `unknown` and refuses at once.)
+#[test]
+fn cdo_slot_gate_entry_refuses_what_it_cannot_check() {
+    let s = Slot::new();
+    let (gate, script) = gate_folder(&s);
+    let t = s.0.path();
+    let cargo_log = || std::fs::read_to_string(t.join("cargo-log")).unwrap_or_default();
+    std::fs::create_dir_all(s.dir()).unwrap();
+    std::fs::write(s.dir().join("entries"), "").unwrap();
+    let out = gate_cmd(&s, &gate, &script, &[], &[]).output().unwrap();
+    let text =
+        String::from_utf8_lossy(&out.stdout).into_owned() + &String::from_utf8_lossy(&out.stderr);
+    assert_eq!(out.status.code(), Some(1), "{text}");
+    assert!(text.contains("cannot record this run"), "{text}");
+    assert_eq!(cargo_log(), "", "it built without a record: {text}");
+    std::fs::remove_file(s.dir().join("entries")).unwrap();
+
+    // A timing of a reused PID: its locks held by stand-ins, its file naming
+    // the gate's parent shell with start time 1.
+    let d = s.dir().display().to_string();
+    let gate_script = gate.join(&script).display().to_string();
+    let body = format!(
+        "mkdir -p {d}/id {d}/timings; \
+         flock -s {d}/timed.lock sleep 600 & l1=$!; flock -x {d}/id/timed.feedfeedfeedfeed sleep 600 & l2=$!; \
+         sleep 0.5; \
+         key=$(grep -h '^lock:' /proc/$l2/fdinfo/* | awk '{{print $7}}' | head -n 1); \
+         printf 'owner=old\\nreason=r\\nsince=2026-11-26T00:00:00Z\\npid=%s\\npid_start=1\\nkept=1\\nlock_key=%s\\n' $$ \"$key\" >{d}/timings/feedfeedfeedfeed; \
+         bash '{gate_script}' fmt; rc=$?; pkill -P $l1; pkill -P $l2; kill $l1 $l2; exit $rc"
+    );
+    let env = gate_cmd(&s, &gate, &script, &[], &[("CDO_SLOT_ENTRY_WAIT_S", "1")]);
+    let mut c = scrubbed(std::process::Command::new("bash"));
+    c.args(["-c", &body]);
+    for (k, v) in env.get_envs() {
+        if let Some(v) = v {
+            c.env(k, v);
+        }
+    }
+    let out = c.output().unwrap();
+    let text =
+        String::from_utf8_lossy(&out.stdout).into_owned() + &String::from_utf8_lossy(&out.stderr);
+    assert_eq!(out.status.code(), Some(1), "{text}");
+    assert!(text.contains("refused: a CDO timing still runs"), "{text}");
+    assert_eq!(
+        cargo_log(),
+        "",
+        "it took a reused PID's timing as its own: {text}"
+    );
+}
+
+/// The env of a `gate_cmd` (BASE_ENV, the stub PATH, the slot) plus `env`, on
+/// `bash -c <body>`.
+fn gate_shell(
+    s: &Slot,
+    gate: &std::path::Path,
+    script: &str,
+    body: &str,
+    env: &[(&str, &str)],
+) -> std::process::Command {
+    let base = gate_cmd(s, gate, script, &[], env);
+    let mut c = scrubbed(std::process::Command::new("bash"));
+    c.args(["-c", body]);
+    for (k, v) in base.get_envs() {
+        if let Some(v) = v {
+            c.env(k, v);
+        }
+    }
+    c
+}
+
+/// ⟨TLS-135 review r2, sol⟩ The production run: a real `ci-steps task` (its
+/// steps stubbed) is in its `fmt` step when a foreign timing begins. The
+/// timing waits for the step (its record), not for the run, which is quiet
+/// while its step runs; after the step the run is admitted afresh and waits
+/// for the timing (review r3): it pauses between its steps, builds nothing
+/// beside the timing, and ends green.
+///
+/// Mutation (2026-11-26): `build_step` running its step without `quiet on` ->
+/// the timing waits for the run while the run's next step waits for the timing:
+/// the timing is refused (red); restored, green.
+#[test]
+fn cdo_slot_a_run_pauses_between_its_steps_for_a_timing() {
+    let s = Slot::new();
+    let (gate, script) = gate_folder(&s);
+    let t = s.0.path();
+    let cargo_log = || std::fs::read_to_string(t.join("cargo-log")).unwrap_or_default();
+    let repo = t.join("repo");
+    std::fs::create_dir_all(&repo).unwrap();
+    crate::git::run(&repo, &["init", "-q"]);
+    let grammar = t.join("grammar");
+    std::fs::create_dir_all(grammar.join("src")).unwrap();
+    std::fs::write(grammar.join("src/node-types.json"), "[]").unwrap();
+    let go = t.join("go").display().to_string();
+    let gs = grammar.display().to_string();
+    let log = t.join("task.log");
+    let mut task = Reap(
+        gate_cmd(
+            &s,
+            &gate,
+            &format!("{script} task"),
+            &[],
+            &[
+                ("TLS135_HOLD", go.as_str()),
+                ("TREE_SITTER_AL_PATH", gs.as_str()),
+            ],
+        )
+        .current_dir(&repo)
+        .stdout(log_file(&log))
+        .stderr(std::fs::OpenOptions::new().append(true).open(&log).unwrap())
+        .spawn()
+        .unwrap(),
+    );
+    until("the run's fmt step builds", &|| {
+        t.join("fmt-running").exists()
+    });
+    let mut timing = test_timing(&s, &[("CDO_SLOT_TIMED_WAIT_S", "15")]);
+    until("the timing waits for the step", &|| {
+        s.run("probe", &["status"], &[])
+            .1
+            .contains("timed by lane since")
+    });
+    std::fs::write(&go, "").unwrap();
+    let tid = timing.id();
+    until("the timing begins between the run's steps", &|| {
+        let st = std::fs::read_to_string(format!("/proc/{tid}/stat")).unwrap_or_default();
+        if st.rsplit_once(") ").is_none_or(|(_, r)| r.starts_with('Z')) {
+            panic!(
+                "the timing ended without beginning: {}",
+                std::fs::read_to_string(&log).unwrap_or_default()
+            );
+        }
+        t.join("on").exists()
+    });
+    assert_eq!(cargo_log(), "after\n", "a step built beside the timing");
+    std::fs::write(t.join("end"), "").unwrap();
+    assert_eq!(timing.wait().unwrap().code(), Some(0));
+    let code = task.wait().unwrap().code();
+    let text = std::fs::read_to_string(&log).unwrap_or_default();
+    assert_eq!(code, Some(0), "{text}");
+    // No step built while the timing ran (each would log `beside`): the run
+    // paused between its steps.
+    assert!(!cargo_log().contains("beside"), "{}", cargo_log());
+}
+
+/// ⟨TLS-135 review r2, sol and Fable⟩ A timing that scans while a gate writes
+/// its record (CDO_SLOT_TEST_WRITE_PAUSE_S holds the write half done) neither
+/// removes the record's temporary file (only exact `<pid>.<start>` names are
+/// judged) nor lets the gate build beside it: the record is complete before
+/// the decision, whatever the order of the lines around the ENTER hook.
+///
+/// Mutations (2026-11-26), each red, restored, green: the scan judging every
+/// name in `entries/` again -> the temporary file is removed, the gate cannot
+/// write its record and refuses (exit 1); the decision moved before the record
+/// write, the ENTER hook left after both (Fable's mutant) -> the gate builds
+/// beside the timing.
+#[test]
+fn cdo_slot_a_timing_scan_during_a_record_write_neither_breaks_nor_misses_it() {
+    let s = Slot::new();
+    let (gate, script) = gate_folder(&s);
+    let t = s.0.path();
+    let cargo_log = || std::fs::read_to_string(t.join("cargo-log")).unwrap_or_default();
+    let log = t.join("gate.log");
+    let mut g = Reap(
+        gate_cmd(
+            &s,
+            &gate,
+            &script,
+            &[],
+            &[("CDO_SLOT_TEST_WRITE_PAUSE_S", "4")],
+        )
+        .stdout(log_file(&log))
+        .stderr(std::fs::OpenOptions::new().append(true).open(&log).unwrap())
+        .spawn()
+        .unwrap(),
+    );
+    s.wait_paused();
+    let mut timing = test_timing(&s, &[]);
+    until("the timing runs", &|| t.join("on").exists());
+    until("the gate decided", &|| {
+        let l = std::fs::read_to_string(&log).unwrap_or_default();
+        l.contains("waiting for the CDO timing")
+            || l.contains("refusing")
+            || !cargo_log().is_empty()
+    });
+    assert_eq!(cargo_log(), "", "the gate built beside the timing");
+    std::fs::write(t.join("end"), "").unwrap();
+    assert_eq!(timing.wait().unwrap().code(), Some(0));
+    let code = g.wait().unwrap().code();
+    let text = std::fs::read_to_string(&log).unwrap_or_default();
+    assert_eq!(code, Some(0), "{text}");
+    assert_eq!(cargo_log(), "after\n", "{text}");
+}
+
+/// ⟨TLS-135 review r2, sol⟩ The deadline holds when timings hand over between
+/// the wait's probe and its decision, round after round: each decision finds a
+/// new timing (it began at the ENTER hook), and each ends before the next
+/// probe (at the RETRY hook). The gate refuses at its 3 s, not never.
+///
+/// Mutation (2026-11-26): the deadline check after a decision that found a
+/// timing dropped -> the gate never refuses over 12 handovers (red); restored,
+/// green.
+#[test]
+fn cdo_slot_gate_entry_deadline_holds_over_repeated_handovers() {
+    let s = Slot::new();
+    let (gate, script) = gate_folder(&s);
+    let t = s.0.path();
+    let cargo_log = || std::fs::read_to_string(t.join("cargo-log")).unwrap_or_default();
+    // The first decision finds timing 0, which then ends; then, each round:
+    // ENTER (start timing i), RETRY (end it).
+    let start_timing = |i: usize| {
+        let tn = t.display().to_string();
+        let body = format!("while [ ! -e {tn}/end{i} ]; do sleep 0.05; done");
+        let r = s.bg(
+            "A",
+            &[
+                "run",
+                "lane",
+                &format!("t{i}"),
+                "--timed",
+                "--",
+                "bash",
+                "-c",
+                &body,
+            ],
+            &[],
+        );
+        until("the timing has begun", &|| {
+            s.run("probe", &["status"], &[])
+                .1
+                .contains(&format!("(t{i})"))
+        });
+        r
+    };
+    let mut timings = vec![start_timing(0)];
+    let mut g = Reap(
+        gate_cmd(
+            &s,
+            &gate,
+            &script,
+            &[],
+            &[
+                ("CDO_SLOT_ENTRY_WAIT_S", "3"),
+                ("CDO_SLOT_TEST_PAUSE_ENTER_S", "60"),
+                ("CDO_SLOT_TEST_PAUSE_RETRY_S", "60"),
+            ],
+        )
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .spawn()
+        .unwrap(),
+    );
+    // The first `enter`'s decision: timing 0 runs.
+    s.wait_paused();
+    s.resume();
+    let gid = g.id();
+    let gate_alive = || {
+        std::fs::read_to_string(format!("/proc/{gid}/stat"))
+            .ok()
+            .and_then(|st| st.rsplit_once(") ").map(|(_, r)| !r.starts_with('Z')))
+            .unwrap_or(false)
+    };
+    let paused_or_done = || {
+        !gate_alive()
+            || std::fs::read_dir(s.dir())
+                .unwrap()
+                .flatten()
+                .any(|e| e.file_name().to_string_lossy().starts_with("paused."))
+    };
+    // Once the gate waits (parked), timing 0 ends: the wait's probe sees none,
+    // and the gate decides again.
+    until("the gate waits", &|| {
+        std::fs::read_dir(s.dir().join("parked"))
+            .map(|d| d.flatten().count() > 0)
+            .unwrap_or(false)
+    });
+    std::fs::write(t.join("end0"), "").unwrap();
+    assert_eq!(timings[0].wait().unwrap().code(), Some(0));
+    let mut ended = false;
+    for i in 1..=12 {
+        // ENTER: the next decision; timing i begins first.
+        until("the gate's next window", &paused_or_done);
+        if !gate_alive() {
+            ended = true;
+            break;
+        }
+        s.wait_paused();
+        timings.push(start_timing(i));
+        s.resume();
+        // RETRY: the decision found timing i; it ends before the next probe.
+        until("the gate's next window", &paused_or_done);
+        if !gate_alive() {
+            ended = true;
+            break;
+        }
+        s.wait_paused();
+        std::fs::write(t.join(format!("end{i}")), "").unwrap();
+        assert_eq!(timings[i].wait().unwrap().code(), Some(0));
+        s.resume();
+    }
+    assert!(ended, "the gate never refused over 12 handovers");
+    assert_eq!(g.wait().unwrap().code(), Some(1));
+    assert_eq!(cargo_log(), "", "it built");
+    for (i, _) in timings.iter().enumerate() {
+        let _ = std::fs::write(t.join(format!("end{i}")), "");
+    }
+}
+
+/// ⟨TLS-135 review r3, sol and Fable⟩ A real `ci-steps all` (its steps
+/// stubbed) waits for its background build quietly. The order that deadlocked:
+/// the build records itself and is held (the ENTER hook, for `ci-steps build`
+/// only) while the run's `test` step ends and the run is admitted again and
+/// reaches its join; a timing begins (it counts the held build); the build then
+/// sees the timing and parks. The timing must begin (the run is quiet at its
+/// join), the build then runs after it, and the run ends green.
+///
+/// Mutation (2026-11-26): the join a plain `wait "$build_pid"` again -> the
+/// timing counts the run, which waits for the build, which waits for the
+/// timing: the timing is refused (red); restored, green. (r4: with the join
+/// marker the same break is red at "the run is quiet at its join".) (r7,
+/// Fable) the ending keeper timing not skipped (then `timing_ending`, now
+/// `timing_releasing`) -> after its perf-bounds
+/// step the run waits for the step's ending timing ("waiting for the CDO
+/// timing", red); restored, green.
+#[test]
+fn cdo_slot_ci_steps_all_waits_for_its_build_quietly() {
+    use std::os::unix::fs::PermissionsExt;
+    let s = Slot::new();
+    let (gate, script) = gate_folder(&s);
+    let t = s.0.path();
+    let cargo_log = || std::fs::read_to_string(t.join("cargo-log")).unwrap_or_default();
+    let repo = t.join("repo");
+    std::fs::create_dir_all(repo.join("scripts")).unwrap();
+    std::fs::create_dir_all(repo.join("tests")).unwrap();
+    std::fs::write(
+        repo.join("tests/perf_bounds.rs"),
+        "mod release_checks {\n    #[test]\n    fn t() {}\n}\n",
+    )
+    .unwrap();
+    crate::git::run(&repo, &["init", "-q"]);
+    let grammar = t.join("grammar");
+    std::fs::create_dir_all(grammar.join("src")).unwrap();
+    std::fs::write(grammar.join("src/node-types.json"), "[]").unwrap();
+    let bin = t.join("perf-bounds-stand-in");
+    std::fs::write(
+        &bin,
+        "#!/bin/bash\nif [ \"$1\" = --list ]; then\n\
+         case \" $* \" in *\" --ignored \"*) exit 0 ;; esac\n\
+         echo 'release_checks::t: test'; exit 0\nfi\nexit 0\n",
+    )
+    .unwrap();
+    std::fs::set_permissions(&bin, std::fs::Permissions::from_mode(0o755)).unwrap();
+    let (gs, bs, td) = (
+        grammar.display().to_string(),
+        bin.display().to_string(),
+        t.join("target").display().to_string(),
+    );
+    let log = t.join("all.log");
+    let go = t.join("go").display().to_string();
+    let mut all = Reap(
+        gate_cmd(
+            &s,
+            &gate,
+            &format!("{script} all"),
+            &[],
+            &[
+                ("TREE_SITTER_AL_PATH", gs.as_str()),
+                ("CI_STEPS_PERF_BOUNDS_BIN", bs.as_str()),
+                ("CARGO_TARGET_DIR", td.as_str()),
+                ("CDO_SLOT_TEST_PAUSE_ENTER_S", "60"),
+                ("CDO_SLOT_TEST_PAUSE_ENTER_NAME", "ci-steps build"),
+                ("TLS135_HOLD", go.as_str()),
+                ("TLS135_HOLD_CMD", "test"),
+            ],
+        )
+        .current_dir(&repo)
+        .stdout(log_file(&log))
+        .stderr(std::fs::OpenOptions::new().append(true).open(&log).unwrap())
+        .spawn()
+        .unwrap(),
+    );
+    // The build is held after its record. The run's test step is held at its
+    // last cargo call; then it ends, the run is admitted afresh (its record is
+    // written again: a new file) and goes quiet at its join (review r4: a
+    // marker, not a sleep).
+    s.wait_paused();
+    until("the run's test step runs its last cargo call", &|| {
+        t.join("test-running").exists()
+    });
+    let pid = all.id();
+    let stat = std::fs::read_to_string(format!("/proc/{pid}/stat")).unwrap();
+    let start = stat
+        .rsplit_once(") ")
+        .unwrap()
+        .1
+        .split(' ')
+        .nth(19)
+        .unwrap()
+        .to_string();
+    let name = format!("{pid}.{start}");
+    let record = s.dir().join("entries").join(&name);
+    let ino = |p: &std::path::Path| {
+        std::fs::metadata(p)
+            .map(|m| std::os::unix::fs::MetadataExt::ino(&m))
+            .ok()
+    };
+    let before = ino(&record);
+    assert!(before.is_some(), "precondition: the run is recorded");
+    std::fs::write(t.join("go"), "").unwrap();
+    until("the run is admitted afresh after its test step", &|| {
+        ino(&record).is_some_and(|i| Some(i) != before)
+    });
+    until("the run is quiet at its join", &|| {
+        s.dir().join("quiet").join(&name).exists()
+    });
+    let mut timing = test_timing(&s, &[("CDO_SLOT_TIMED_WAIT_S", "10")]);
+    until("the timing has its lock", &|| {
+        s.run("probe", &["status"], &[])
+            .1
+            .contains("timed by lane since")
+    });
+    s.resume();
+    let tid = timing.id();
+    until(
+        "the timing begins while the run waits for its build",
+        &|| {
+            let st = std::fs::read_to_string(format!("/proc/{tid}/stat")).unwrap_or_default();
+            if st.rsplit_once(") ").is_none_or(|(_, r)| r.starts_with('Z')) {
+                panic!(
+                    "the timing ended without beginning: {}",
+                    std::fs::read_to_string(&log).unwrap_or_default()
+                );
+            }
+            t.join("on").exists()
+        },
+    );
+    std::fs::write(t.join("end"), "").unwrap();
+    assert_eq!(timing.wait().unwrap().code(), Some(0));
+    // The build's next decision passes the ENTER hook again: let it through.
+    s.resume();
+    let code = all.wait().unwrap().code();
+    let text = std::fs::read_to_string(&log).unwrap_or_default();
+    assert_eq!(code, Some(0), "{text}");
+    assert!(!cargo_log().contains("beside"), "{}", cargo_log());
+    // Review r7 (Fable): after its perf-bounds step the run does not wait for
+    // the step's own ending timing (its keeper lets go within 2 s).
+    let after = text
+        .split("=== ci-steps: perf-bounds ===")
+        .nth(1)
+        .unwrap_or("");
+    // No wait at all, not even one that ends at once ("the CDO timing ended").
+    assert!(
+        !after.contains("waiting for the CDO timing") && !after.contains("the CDO timing ended"),
+        "the run waited for its perf-bounds step's ending timing: {after}"
+    );
+}
+
+/// ⟨TLS-135 review r3, sol⟩ After a quiet step a run is admitted afresh before
+/// it works on in its own shell: a timing may have skipped it while it was
+/// quiet. A run whose step ends under such a timing waits (here: refuses after
+/// 1 s) and builds nothing.
+///
+/// Mutation (2026-11-26): the fresh admission dropped from `build_step` -> the
+/// run's own cargo runs beside the timing (red); restored, green.
+#[test]
+fn cdo_slot_a_run_is_admitted_afresh_after_a_quiet_step() {
+    let s = Slot::new();
+    let (gate, script) = gate_folder(&s);
+    let t = s.0.path();
+    let cargo_log = || std::fs::read_to_string(t.join("cargo-log")).unwrap_or_default();
+    let td = t.display().to_string();
+    let entry_lib = concat!(env!("CARGO_MANIFEST_DIR"), "/scripts/build-entry");
+    let body = format!(
+        "source '{entry_lib}'; build_entry run || exit 9; \
+         build_step bash -c 'touch {td}/stepping; until [ -e {td}/go ]; do sleep 0.05; done'; \
+         cargo fmt; echo done >{td}/worked-on"
+    );
+    let mut run = Reap(
+        gate_shell(&s, &gate, &script, &body, &[("CDO_SLOT_ENTRY_WAIT_S", "1")])
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .spawn()
+            .unwrap(),
+    );
+    until("the run's step runs", &|| t.join("stepping").exists());
+    let mut timing = test_timing(&s, &[]);
+    until("the timing begins beside the quiet run", &|| {
+        t.join("on").exists()
+    });
+    std::fs::write(t.join("go"), "").unwrap();
+    assert_eq!(run.wait().unwrap().code(), Some(1));
+    assert!(!t.join("worked-on").exists(), "the run worked on");
+    assert_eq!(cargo_log(), "", "the run built beside the timing");
+    std::fs::write(t.join("end"), "").unwrap();
+    assert_eq!(timing.wait().unwrap().code(), Some(0));
+}
+
+/// ⟨TLS-135 review r3, Fable⟩ `build_step` leaves the quiet state after its
+/// step: a run alive after a step is counted by a timing again. And a run whose
+/// quiet state cannot be removed stops (exit 1) rather than work on.
+///
+/// Mutations (2026-11-26), each red, restored, green: `quiet off` not run (its
+/// result taken as success) -> the run stays skipped, the timing begins (exit
+/// 0); the `exit 1` after a failed `quiet off` dropped -> the run works on.
+#[test]
+fn cdo_slot_build_step_leaves_the_quiet_state() {
+    use std::os::unix::fs::PermissionsExt;
+    let s = Slot::new();
+    let (gate, script) = gate_folder(&s);
+    let t = s.0.path();
+    let td = t.display().to_string();
+    let entry_lib = concat!(env!("CARGO_MANIFEST_DIR"), "/scripts/build-entry");
+    let body = format!(
+        "source '{entry_lib}'; build_entry run || exit 9; build_step true; \
+         touch {td}/ready; sleep 600"
+    );
+    let run = Reap(
+        gate_shell(&s, &gate, &script, &body, &[])
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .spawn()
+            .unwrap(),
+    );
+    until("the run is past its step", &|| t.join("ready").exists());
+    let (code, text) = s.run(
+        "A",
+        &["run", "lane", "timing", "--timed", "--", "true"],
+        &[("CDO_SLOT_TIMED_WAIT_S", "1")],
+    );
+    assert_eq!(code, Some(6), "the run stayed quiet after its step: {text}");
+    assert!(text.contains("(entry)"), "{text}");
+    drop(run);
+
+    // `quiet off` cannot remove the state (its folder is read-only).
+    let body = format!(
+        "source '{entry_lib}'; build_entry run2 || exit 9; \
+         build_step bash -c 'chmod a-w \"$CDO_SLOT_DIR/quiet\"'; echo on >{td}/worked-on"
+    );
+    let out = gate_shell(&s, &gate, &script, &body, &[]).output().unwrap();
+    let quiet = s.dir().join("quiet");
+    std::fs::set_permissions(&quiet, std::fs::Permissions::from_mode(0o755)).unwrap();
+    let text =
+        String::from_utf8_lossy(&out.stdout).into_owned() + &String::from_utf8_lossy(&out.stderr);
+    assert_eq!(out.status.code(), Some(1), "{text}");
+    assert!(text.contains("could not leave the quiet state"), "{text}");
+    assert!(!t.join("worked-on").exists(), "the run worked on: {text}");
+}
+
+/// ⟨TLS-135 review r4, sol⟩ A run that cannot go quiet (here `quiet` is a file,
+/// so its folder cannot be made) does not run its step: counted while it waits
+/// for the step, it could wait on the timing that waits for it. It stops with
+/// exit 1 before the step.
+///
+/// Mutation (2026-11-26): a failed `quiet on` only said, the step run anyway
+/// (r3's behaviour) -> the step runs (red); restored, green.
+#[test]
+fn cdo_slot_build_step_does_not_run_a_step_it_cannot_wait_for_quietly() {
+    let s = Slot::new();
+    let (gate, script) = gate_folder(&s);
+    let t = s.0.path();
+    let td = t.display().to_string();
+    std::fs::create_dir_all(s.dir()).unwrap();
+    std::fs::write(s.dir().join("quiet"), "").unwrap();
+    let entry_lib = concat!(env!("CARGO_MANIFEST_DIR"), "/scripts/build-entry");
+    let body = format!(
+        "source '{entry_lib}'; build_entry run || exit 9; build_step touch {td}/stepped; exit 0"
+    );
+    let out = gate_shell(&s, &gate, &script, &body, &[]).output().unwrap();
+    let text =
+        String::from_utf8_lossy(&out.stdout).into_owned() + &String::from_utf8_lossy(&out.stderr);
+    assert_eq!(out.status.code(), Some(1), "{text}");
+    assert!(text.contains("could not go quiet"), "{text}");
+    assert!(!t.join("stepped").exists(), "the step ran: {text}");
+}
+
+/// A stand-in `perf_bounds` binary for `ci-steps perf-bounds`
+/// (CI_STEPS_PERF_BOUNDS_BIN): it lists as many timing tests as
+/// tests/perf_bounds.rs declares, and its run sleeps 1 s.
+fn perf_bounds_stand_in(s: &Slot) -> std::path::PathBuf {
+    use std::os::unix::fs::PermissionsExt;
+    let src = std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/tests/perf_bounds.rs"))
+        .unwrap();
+    let declared = src
+        .split_once("\nmod release_checks")
+        .unwrap()
+        .1
+        .lines()
+        .filter(|l| l.trim() == "#[test]")
+        .count();
+    let bin = s.0.path().join("perf-bounds-stand-in");
+    std::fs::write(
+        &bin,
+        format!(
+            "#!/usr/bin/env bash\n\
+             if [ \"$1\" = --list ]; then\n\
+             case \" $* \" in *\" --ignored \"*) exit 0 ;; esac\n\
+             for ((i = 0; i < {declared}; i++)); do echo \"release_checks::t$i: test\"; done; exit 0\n\
+             fi\nsleep 1\nexit 0\n"
+        ),
+    )
+    .unwrap();
+    std::fs::set_permissions(&bin, std::fs::Permissions::from_mode(0o755)).unwrap();
+    bin
+}
+
+/// ⟨TLS-135 review r4, r6, r7⟩ Two real `ci-steps perf-bounds` (a stand-in
+/// test binary) sharing one hold (its token): each counted the other's
+/// `ci-steps` as a build and both were refused after CDO_SLOT_TIMED_WAIT_S.
+/// Now one times, and the other is refused at once ("another timing runs in
+/// this slot"). Forced (review r7, Fable): the first is held in the timing gate
+/// after its check (the TIMED_GATE hook) while the second waits at the gate;
+/// only then does the first publish.
+///
+/// Mutations (2026-11-26), each red, restored, green: the gate not passed
+/// (r6: `entry_turn` not called) -> both refused after 20 s, (1, 1); (r7) the
+/// check made before the gate is taken -> both checked before either
+/// published (red); (r7) `timing_gate` not called -> the hold in the gate is
+/// never reached (red).
+#[test]
+fn cdo_slot_two_perf_bounds_in_one_hold_one_is_refused() {
+    let s = Slot::new();
+    let (gate, script) = gate_folder(&s);
+    let t = s.0.path();
+    let bin = perf_bounds_stand_in(&s);
+    let holder = sleeper();
+    let hpid = holder.id().to_string();
+    let token = ("CDO_SLOT_TOKEN", "tls135-shared");
+    let (code, text) = s.run(
+        "L",
+        &["acquire", "land", "landing", "--bind", &hpid],
+        &[token],
+    );
+    assert_eq!(code, Some(0), "{text}");
+    let bin_s = bin.display().to_string();
+    let lane = |i: usize| {
+        Reap(
+            gate_cmd(
+                &s,
+                &gate,
+                &format!("{script} perf-bounds"),
+                &[],
+                &[
+                    ("CI_STEPS_PERF_BOUNDS_BIN", bin_s.as_str()),
+                    token,
+                    ("CDO_SLOT_BUILD_SCRIPTS", script.as_str()),
+                    ("CDO_SLOT_TIMED_WAIT_S", "20"),
+                    ("CDO_SLOT_TEST_PAUSE_TIMED_GATE_S", "60"),
+                ],
+            )
+            .current_dir(env!("CARGO_MANIFEST_DIR"))
+            .stdout(log_file(&t.join(format!("pb{i}.log"))))
+            .stderr(
+                std::fs::OpenOptions::new()
+                    .append(true)
+                    .open(t.join(format!("pb{i}.log")))
+                    .unwrap(),
+            )
+            .spawn()
+            .unwrap(),
+        )
+    };
+    let mut a = lane(1);
+    let mut b = lane(2);
+    // One is held in the gate after its check; the other has the gate open
+    // (it waits for it). Both acquires carry the reason in their argv.
+    let gate_lock = s.dir().join("timing-gate.lock");
+    let at_gate = || {
+        std::fs::read_dir("/proc")
+            .unwrap()
+            .flatten()
+            .filter(|e| e.file_name().to_string_lossy().parse::<u32>().is_ok())
+            .filter(|e| {
+                let cmd = std::fs::read(e.path().join("cmdline")).unwrap_or_default();
+                String::from_utf8_lossy(&cmd).contains("perf-bounds timing")
+                    && std::fs::read_dir(e.path().join("fd")).is_ok_and(|d| {
+                        d.flatten()
+                            .any(|f| std::fs::read_link(f.path()).is_ok_and(|l| l == gate_lock))
+                    })
+            })
+            .count()
+    };
+    s.wait_paused();
+    until("the other waits at the gate", &|| at_gate() >= 2);
+    s.resume();
+    // A second hold of the hook (only if the check came before the gate: the
+    // mutant) is let through too, so the test ends either way.
+    let offered = std::time::Instant::now();
+    while offered.elapsed().as_secs() < 3 {
+        let found = std::fs::read_dir(s.dir())
+            .unwrap()
+            .flatten()
+            .any(|e| e.file_name().to_string_lossy().starts_with("paused."));
+        if found {
+            s.wait_paused();
+            s.resume();
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(50));
+    }
+    let (ca, cb) = (a.wait().unwrap().code(), b.wait().unwrap().code());
+    let logs = format!(
+        "{}\n---\n{}",
+        std::fs::read_to_string(t.join("pb1.log")).unwrap_or_default(),
+        std::fs::read_to_string(t.join("pb2.log")).unwrap_or_default()
+    );
+    // Waiting on each other ends in two refusals (exit 1) at the wait: the
+    // exits and the prompt refusal's message say which happened.
+    let mut codes = [ca, cb];
+    codes.sort();
+    assert_eq!(codes, [Some(0), Some(1)], "{logs}");
+    assert!(
+        logs.contains("refused: another timing runs in this slot"),
+        "{logs}"
+    );
+    drop(holder);
+}
+
+/// ⟨TLS-135 review r5, sol and Fable⟩ A `ci-steps perf-bounds` run under its
+/// own outer timing (`cdo-slot run ... --timed -- ci-steps perf-bounds`) does
+/// not wait for that timing to end: it waits for this command. It shares the
+/// hold and times as before.
+///
+/// Mutation (2026-11-26): the start's check (then `entry_turn`, now the timing
+/// gate's) waiting for any timing (`timed_now`, as in r4) -> it waits for the
+/// outer timing and is refused after its 20 s (red);
+/// restored, green. (r6) its first check by `timed_now` -> refused at once,
+/// exit 1 (red); restored, green.
+#[test]
+fn cdo_slot_perf_bounds_under_its_own_timed_run_does_not_wait_for_it() {
+    let s = Slot::new();
+    let (gate, script) = gate_folder(&s);
+    let bin = perf_bounds_stand_in(&s);
+    let bin_s = bin.display().to_string();
+    let path = format!(
+        "{}:{}",
+        gate.display(),
+        std::env::var("PATH").unwrap_or_default()
+    );
+    let gate_script = gate.join(&script).display().to_string();
+    let out = s
+        .cmd(
+            "A",
+            &[
+                "run",
+                "lane",
+                "outer",
+                "--timed",
+                "--",
+                "bash",
+                &gate_script,
+                "perf-bounds",
+            ],
+            &[
+                ("PATH", &path),
+                ("CI_STEPS_PERF_BOUNDS_BIN", &bin_s),
+                ("CDO_SLOT_TIMED_WAIT_S", "20"),
+            ],
+        )
+        .current_dir(env!("CARGO_MANIFEST_DIR"))
+        .output()
+        .unwrap();
+    let text =
+        String::from_utf8_lossy(&out.stdout).into_owned() + &String::from_utf8_lossy(&out.stderr);
+    assert_eq!(out.status.code(), Some(0), "{text}");
+    assert!(text.contains("ci-steps: perf-bounds timing:"), "{text}");
+}
+
+/// ⟨TLS-135 review r6, sol⟩ sol's interleaving: in one hold (its token), a
+/// foreign `ci-steps perf-bounds` F is past its acquire (the ACQUIRED hook holds
+/// it) when an outer timed `run` begins; F then meets the outer timing; only
+/// after that does the outer command start its own `perf-bounds` N. Under r5, F
+/// waited for the outer timing keeping the turn, N needed the turn before it
+/// could see the outer timing was its own, and the outer timing waited for N:
+/// N was refused after its wait. Now F is refused at once and keeps nothing;
+/// N times under its own outer timing and the run ends green. And (r7, sol) F,
+/// refused, ends before the outer timing does: no fresh admission parks it
+/// behind the timing that refused it.
+///
+/// Mutations (2026-11-26), each red, restored, green: r5's `scripts/cdo-slot`
+/// (cd829e9a1: F waits keeping the turn) -> N is refused, the outer run exits 1;
+/// (r7) a refused perf-bounds re-admitted (`build_quiet_end` for
+/// `build_quiet_stop`) -> F waits behind the outer timing past 15 s.
+#[test]
+fn cdo_slot_a_foreign_entry_timing_keeps_no_turn_from_a_nested_one() {
+    let s = Slot::new();
+    let (gate, script) = gate_folder(&s);
+    let t = s.0.path();
+    let td = t.display().to_string();
+    let bin = perf_bounds_stand_in(&s);
+    let bin_s = bin.display().to_string();
+    let token = ("CDO_SLOT_TOKEN", "tls135-nested");
+    let holder = sleeper();
+    let hpid = holder.id().to_string();
+    let (code, text) = s.run(
+        "L",
+        &["acquire", "land", "landing", "--bind", &hpid],
+        &[token],
+    );
+    assert_eq!(code, Some(0), "{text}");
+    let flog = t.join("foreign.log");
+    let mut foreign = Reap(
+        gate_cmd(
+            &s,
+            &gate,
+            &format!("{script} perf-bounds"),
+            &[],
+            &[
+                ("CI_STEPS_PERF_BOUNDS_BIN", bin_s.as_str()),
+                token,
+                ("CDO_SLOT_TEST_PAUSE_ACQUIRED_S", "60"),
+                ("CDO_SLOT_TIMED_WAIT_S", "20"),
+                ("CDO_SLOT_ENTRY_WAIT_S", "60"),
+            ],
+        )
+        .current_dir(env!("CARGO_MANIFEST_DIR"))
+        .stdout(log_file(&flog))
+        .stderr(
+            std::fs::OpenOptions::new()
+                .append(true)
+                .open(&flog)
+                .unwrap(),
+        )
+        .spawn()
+        .unwrap(),
+    );
+    s.wait_paused();
+    // The outer timed run; its command waits for `go`, then runs N.
+    let gate_script = gate.join(&script).display().to_string();
+    let body = format!(
+        "touch {td}/outer-on; until [ -e {td}/go ]; do sleep 0.05; done; bash '{gate_script}' perf-bounds"
+    );
+    let path = format!(
+        "{}:{}",
+        gate.display(),
+        std::env::var("PATH").unwrap_or_default()
+    );
+    let olog = t.join("outer.log");
+    let mut outer = Reap(
+        s.cmd(
+            "L",
+            &["run", "lane", "outer", "--timed", "--", "bash", "-c", &body],
+            &[
+                token,
+                ("PATH", &path),
+                ("CI_STEPS_PERF_BOUNDS_BIN", &bin_s),
+                ("CDO_SLOT_TIMED_WAIT_S", "20"),
+            ],
+        )
+        .current_dir(env!("CARGO_MANIFEST_DIR"))
+        .stdout(log_file(&olog))
+        .stderr(
+            std::fs::OpenOptions::new()
+                .append(true)
+                .open(&olog)
+                .unwrap(),
+        )
+        .spawn()
+        .unwrap(),
+    );
+    until("the outer timing runs", &|| t.join("outer-on").exists());
+    // F goes on and meets the outer timing: it is refused.
+    s.resume();
+    until("F met the outer timing", &|| {
+        std::fs::read_to_string(&flog)
+            .unwrap_or_default()
+            .contains("another timing runs in this slot")
+    });
+    // Review r7 (sol): F, refused, ends at once: before the outer timing ends
+    // (no fresh admission that parks behind it).
+    let fid = foreign.id();
+    let live = || {
+        std::fs::read_to_string(format!("/proc/{fid}/stat"))
+            .ok()
+            .and_then(|st| st.rsplit_once(") ").map(|(_, r)| !r.starts_with('Z')))
+            .unwrap_or(false)
+    };
+    let refused = std::time::Instant::now();
+    while live() && refused.elapsed() < std::time::Duration::from_secs(15) {
+        std::thread::sleep(std::time::Duration::from_millis(100));
+    }
+    assert!(
+        !live(),
+        "the refused perf-bounds waited behind the outer timing"
+    );
+    std::fs::write(t.join("go"), "").unwrap();
+    let code = outer.wait().unwrap().code();
+    let text = std::fs::read_to_string(&olog).unwrap_or_default();
+    assert_eq!(code, Some(0), "the nested perf-bounds: {text}");
+    assert!(text.contains("ci-steps: perf-bounds timing:"), "{text}");
+    assert_eq!(foreign.wait().unwrap().code(), Some(1));
+    let f = std::fs::read_to_string(&flog).unwrap_or_default();
+    assert!(
+        f.contains("refused: another timing runs in this slot"),
+        "{f}"
+    );
+    drop(holder);
+}
+
+/// ⟨TLS-135 review r7, sol⟩ Every timed start passes one gate: a real `ci-steps
+/// perf-bounds` and a plain `cdo-slot run --timed` in one hold (its token), in
+/// both orders, each held at the publication point (the TIMED_GATE hook) while
+/// the other starts. The first one's timing runs; the second is refused at once
+/// ("another timing runs in this slot"), never published beside it.
+///
+/// Mutations (2026-11-26, on r7's rule, each red, restored, green): the check
+/// ignoring a running perf-bounds timing when the new one is not an entry ->
+/// in order 1 the run publishes beside the perf-bounds; the check ignoring a
+/// running plain timing when the new one is an entry -> in order 2 the
+/// perf-bounds times beside the run. (r8: one rule for all, any foreign timing
+/// refuses; the gate's check dropped -> order 1 red.)
+#[test]
+fn cdo_slot_every_timed_start_passes_one_gate_in_both_orders() {
+    let s = Slot::new();
+    let (gate, script) = gate_folder(&s);
+    let t = s.0.path();
+    let bin = perf_bounds_stand_in(&s);
+    let bin_s = bin.display().to_string();
+    let token = ("CDO_SLOT_TOKEN", "tls135-gate");
+    let holder = sleeper();
+    let hpid = holder.id().to_string();
+    let (code, text) = s.run(
+        "L",
+        &["acquire", "land", "landing", "--bind", &hpid],
+        &[token],
+    );
+    assert_eq!(code, Some(0), "{text}");
+    let perf_bounds = |log: &std::path::Path, hook: &str, secs: &str| {
+        Reap(
+            gate_cmd(
+                &s,
+                &gate,
+                &format!("{script} perf-bounds"),
+                &[],
+                &[
+                    ("CI_STEPS_PERF_BOUNDS_BIN", bin_s.as_str()),
+                    token,
+                    (hook, secs),
+                ],
+            )
+            .current_dir(env!("CARGO_MANIFEST_DIR"))
+            .stdout(log_file(log))
+            .stderr(std::fs::OpenOptions::new().append(true).open(log).unwrap())
+            .spawn()
+            .unwrap(),
+        )
+    };
+    let read = |p: &std::path::Path| std::fs::read_to_string(p).unwrap_or_default();
+    // A process whose command line holds `marker` has the gate open (it waits
+    // for it: the other one holds it, paused).
+    let gate_lock = s.dir().join("timing-gate.lock");
+    let at_gate = |marker: &str| {
+        std::fs::read_dir("/proc")
+            .unwrap()
+            .flatten()
+            .filter(|e| e.file_name().to_string_lossy().parse::<u32>().is_ok())
+            .any(|e| {
+                let cmd = std::fs::read(e.path().join("cmdline")).unwrap_or_default();
+                String::from_utf8_lossy(&cmd).contains(marker)
+                    && std::fs::read_dir(e.path().join("fd")).is_ok_and(|d| {
+                        d.flatten()
+                            .any(|f| std::fs::read_link(f.path()).is_ok_and(|l| l == gate_lock))
+                    })
+            })
+    };
+
+    // Order 1: the perf-bounds is at its publication when the run starts.
+    let plog = t.join("pb1.log");
+    let mut pb = perf_bounds(&plog, "CDO_SLOT_TEST_PAUSE_TIMED_GATE_S", "60");
+    s.wait_paused();
+    let run = s
+        .cmd(
+            "L",
+            &["run", "lane", "plain", "--timed", "--", "true"],
+            &[token],
+        )
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .unwrap();
+    // The run waits for the gate; the perf-bounds then publishes.
+    until("the run waits at the gate", &|| at_gate("plain"));
+    s.resume();
+    let out = run.wait_with_output().unwrap();
+    let text =
+        String::from_utf8_lossy(&out.stdout).into_owned() + &String::from_utf8_lossy(&out.stderr);
+    assert_eq!(
+        out.status.code(),
+        Some(6),
+        "the run beside the perf-bounds: {text}\nperf-bounds: {}",
+        read(&plog)
+    );
+    assert!(
+        text.contains("refused: another timing runs in this slot"),
+        "{text}"
+    );
+    assert_eq!(pb.wait().unwrap().code(), Some(0), "{}", read(&plog));
+
+    // Order 2: the run is at its publication when the perf-bounds starts.
+    let td = t.display().to_string();
+    let body = format!("touch {td}/run-on; sleep 8");
+    let mut run = Reap(
+        s.cmd(
+            "L",
+            &[
+                "run", "lane", "plain2", "--timed", "--", "bash", "-c", &body,
+            ],
+            &[token, ("CDO_SLOT_TEST_PAUSE_TIMED_GATE_S", "60")],
+        )
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .spawn()
+        .unwrap(),
+    );
+    s.wait_paused();
+    let plog = t.join("pb2.log");
+    let mut pb = perf_bounds(&plog, "CDO_SLOT_TEST_PAUSE_TIMED_GATE_S", "");
+    // The perf-bounds is admitted (nothing is published yet) and waits for the
+    // gate; then the run publishes.
+    until("the perf-bounds waits at the gate", &|| {
+        at_gate("perf-bounds timing")
+    });
+    s.resume();
+    let code = pb.wait().unwrap().code();
+    let text = read(&plog);
+    assert_eq!(code, Some(1), "the perf-bounds beside the run: {text}");
+    assert!(
+        text.contains("refused: another timing runs in this slot"),
+        "{text}"
+    );
+    // Checked once the run has ended (review r8, sol: the refusal may come
+    // before the run's drain or command).
+    assert_eq!(run.wait().unwrap().code(), Some(0));
+    assert!(
+        t.join("run-on").exists(),
+        "precondition: the run's timing began"
+    );
+
+    // Order 3 (review r7, Fable's cycle): the perf-bounds already has its
+    // timing (drained, held before its go) when the run starts.
+    let plog = t.join("pb3.log");
+    let mut pb = perf_bounds(&plog, "CDO_SLOT_TEST_PAUSE_GO_S", "60");
+    s.wait_paused();
+    let out = s
+        .cmd(
+            "L",
+            &["run", "lane", "plain3", "--timed", "--", "true"],
+            &[token],
+        )
+        .output()
+        .unwrap();
+    let text =
+        String::from_utf8_lossy(&out.stdout).into_owned() + &String::from_utf8_lossy(&out.stderr);
+    assert_eq!(
+        out.status.code(),
+        Some(6),
+        "the run beside the perf-bounds' timing: {text}"
+    );
+    assert!(
+        text.contains("refused: another timing runs in this slot"),
+        "{text}"
+    );
+    s.resume();
+    assert_eq!(pb.wait().unwrap().code(), Some(0), "{}", read(&plog));
+    drop(holder);
+}
+
+/// ⟨TLS-135 review r7, Fable⟩ The timing gate covers the check and the
+/// publication only, never the drain: a timing whose drain waits for a build
+/// does not keep a second timing out of the gate. The second gets the gate at
+/// once and is refused there at once (r8: one timing at a time), long before
+/// the first's drain ends.
+///
+/// Mutation (2026-11-26): the gate closed at the end of `timed_start` (after
+/// the drain) instead of right after the publication -> the second timing gets
+/// exit 5, "the timing gate ... stayed held" (red; on r7's rule); restored,
+/// green.
+#[test]
+fn cdo_slot_the_timing_gate_is_not_held_across_a_drain() {
+    let s = Slot::new();
+    let fake_name = format!("t135d{}", std::process::id());
+    let fake = s.0.path().join(&fake_name);
+    std::os::unix::fs::symlink("/bin/bash", &fake).unwrap();
+    let names = ("CDO_SLOT_BUILD_NAMES", fake_name.as_str());
+    assert_eq!(s.run("A", &["acquire", "lane", "by hand"], &[]).0, Some(0));
+    let build = stand_in(&s, &fake, &["-c".as_ref(), "sleep 600; true".as_ref()]);
+    let t1 = sleeper();
+    let t1pid = t1.id().to_string();
+    // The first timing drains, waiting for the build.
+    let first = s.bg(
+        "A",
+        &["acquire", "lane", "first", "--bind", &t1pid, "--timed"],
+        &[names, ("CDO_SLOT_TIMED_WAIT_S", "30")],
+    );
+    until("the first timing is published", &|| {
+        s.run("probe", &["status"], &[]).1.contains("(first)")
+    });
+    let t2 = sleeper();
+    let t2pid = t2.id().to_string();
+    let asked = std::time::Instant::now();
+    let (code, text) = s.run(
+        "A",
+        &["acquire", "lane", "second", "--bind", &t2pid, "--timed"],
+        &[
+            names,
+            ("CDO_SLOT_LOCK_WAIT_S", "2"),
+            ("CDO_SLOT_TIMED_WAIT_S", "3"),
+        ],
+    );
+    assert_eq!(code, Some(6), "{text}");
+    assert!(
+        text.contains("refused: another timing runs in this slot"),
+        "{text}"
+    );
+    assert!(
+        asked.elapsed() < std::time::Duration::from_secs(20),
+        "the gate was held across the first timing's drain: {:?}",
+        asked.elapsed()
+    );
+    drop(build);
+    drop(first);
+    drop(t1);
+    drop(t2);
+    assert_eq!(s.run("A", &["release"], &[]).0, Some(0));
+}
+
+/// ⟨TLS-135 review r8, sol⟩ Two sibling `cdo-slot run --timed` in one hold
+/// (its token), each of whose command runs a gate (`ci-steps fmt`): under r7
+/// both timings were allowed, each gate parked behind the other's timing, and
+/// each timing waited for its own command. One timing at a time: the second
+/// run is refused at once, and the first's gate runs under its own timing.
+///
+/// Mutation (2026-11-27): the timing gate's check dropped -> both timings run
+/// and the second sibling is not refused (exit 0, red); restored, green.
+#[test]
+fn cdo_slot_two_sibling_timed_runs_never_wait_on_each_other() {
+    let s = Slot::new();
+    let (gate, script) = gate_folder(&s);
+    let t = s.0.path();
+    let td = t.display().to_string();
+    let token = ("CDO_SLOT_TOKEN", "tls135-siblings");
+    let holder = sleeper();
+    let hpid = holder.id().to_string();
+    let (code, text) = s.run(
+        "L",
+        &["acquire", "land", "landing", "--bind", &hpid],
+        &[token],
+    );
+    assert_eq!(code, Some(0), "{text}");
+    let path = format!(
+        "{}:{}",
+        gate.display(),
+        std::env::var("PATH").unwrap_or_default()
+    );
+    let gate_script = gate.join(&script).display().to_string();
+    // Each command: say it runs, wait for `go`, run its gate, keep its result.
+    let sibling = |i: usize| {
+        let body = format!(
+            "touch {td}/on{i}; until [ -e {td}/go ]; do sleep 0.05; done; \
+             bash '{gate_script}' fmt; echo $? >{td}/rc{i}"
+        );
+        let log = t.join(format!("sib{i}.log"));
+        Reap(
+            s.cmd(
+                "L",
+                &[
+                    "run",
+                    "lane",
+                    &format!("sib{i}"),
+                    "--timed",
+                    "--",
+                    "bash",
+                    "-c",
+                    &body,
+                ],
+                &[token, ("PATH", &path), ("CDO_SLOT_ENTRY_WAIT_S", "3")],
+            )
+            .stdout(log_file(&log))
+            .stderr(std::fs::OpenOptions::new().append(true).open(&log).unwrap())
+            .spawn()
+            .unwrap(),
+        )
+    };
+    let mut a = sibling(1);
+    until("the first sibling's timing runs", &|| {
+        t.join("on1").exists()
+    });
+    let mut b = sibling(2);
+    // Refused at once; given 10 s (a second timing that ran instead waits for
+    // `go`, which comes after this, so the test ends either way).
+    let asked = std::time::Instant::now();
+    while b.0.try_wait().unwrap().is_none() && asked.elapsed().as_secs() < 10 {
+        std::thread::sleep(std::time::Duration::from_millis(100));
+    }
+    std::fs::write(t.join("go"), "").unwrap();
+    let code_b = b.wait().unwrap().code();
+    let text_b = std::fs::read_to_string(t.join("sib2.log")).unwrap_or_default();
+    let code_a = a.wait().unwrap().code();
+    let rc1 = std::fs::read_to_string(t.join("rc1")).unwrap_or_default();
+    assert_eq!(code_b, Some(6), "the second sibling's timing: {text_b}");
+    assert!(
+        text_b.contains("refused: another timing runs in this slot"),
+        "{text_b}"
+    );
+    assert_eq!(
+        rc1.trim(),
+        "0",
+        "the first sibling's gate under its own timing"
+    );
+    assert_eq!(code_a, Some(0));
+    drop(holder);
+}
+
+/// ⟨TLS-135 review r8, sol⟩ A `run --timed` whose wrapper is killed while its
+/// command lives: the command keeps the timing (it inherited the locks), and
+/// a gate it then starts owns that timing (it has the timing's id lock file
+/// open, inherited: review r10, sol), so it runs instead of waiting for
+/// itself.
+///
+/// Mutation (2026-11-27, r8): the `cmd_pid` own-line test dropped from
+/// `timing_scan` -> the gate waits for its own timing and refuses after 2 s
+/// (red); restored, green. (r10) the open-file owner dropped from
+/// `timing_scan` -> the same (red); restored, green.
+#[test]
+fn cdo_slot_a_timed_runs_command_outlives_its_killed_wrapper() {
+    let s = Slot::on_repo_fs();
+    let (gate, script) = gate_folder(&s);
+    let t = s.0.path();
+    let td = t.display().to_string();
+    let path = format!(
+        "{}:{}",
+        gate.display(),
+        std::env::var("PATH").unwrap_or_default()
+    );
+    let gate_script = gate.join(&script).display().to_string();
+    let body = format!(
+        "touch {td}/on; until [ -e {td}/go ]; do sleep 0.05; done; \
+         bash '{gate_script}' fmt; echo $? >{td}/rc"
+    );
+    let mut wrapper = s.bg(
+        "A",
+        &["run", "lane", "outer", "--timed", "--", "bash", "-c", &body],
+        &[("PATH", &path), ("CDO_SLOT_ENTRY_WAIT_S", "2")],
+    );
+    until("the timed command runs", &|| t.join("on").exists());
+    wrapper.0.kill().unwrap();
+    wrapper.0.wait().unwrap();
+    assert!(
+        s.probe().ends_with("timed=1"),
+        "precondition: the command keeps the timing"
+    );
+    std::fs::write(t.join("go"), "").unwrap();
+    until("the command's gate ended", &|| t.join("rc").exists());
+    let rc = std::fs::read_to_string(t.join("rc")).unwrap_or_default();
+    assert_eq!(rc.trim(), "0", "the gate waited for its own timing");
+}
+
+/// ⟨TLS-135 review r8, sol⟩ A keeper never has the timing gate, not even in its
+/// first moment (the KEEPER hook holds it there, before it closes its caller's
+/// descriptors): one stopped there kept every later timed start out.
+///
+/// Mutation (2026-11-27, r8): the gate's close dropped from spawn_keeper's
+/// launch -> the held keeper has `timing-gate.lock` open (red); restored,
+/// green. (r10: the keeper now starts after timed_start_now closed the gate)
+/// that close moved after the keeper's start -> the same (red); restored,
+/// green.
+#[test]
+fn cdo_slot_a_keeper_is_launched_without_the_timing_gate() {
+    let s = Slot::new();
+    assert_eq!(s.run("A", &["acquire", "lane", "by hand"], &[]).0, Some(0));
+    let tm = sleeper();
+    let tpid = tm.id().to_string();
+    let mut timed = s.bg(
+        "A",
+        &["acquire", "lane", "keeper", "--bind", &tpid, "--timed"],
+        &[("CDO_SLOT_TEST_PAUSE_KEEPER_S", "60")],
+    );
+    let paused = || -> Option<u32> {
+        std::fs::read_dir(s.dir()).ok()?.flatten().find_map(|e| {
+            e.file_name()
+                .to_string_lossy()
+                .strip_prefix("paused.")?
+                .parse()
+                .ok()
+        })
+    };
+    until("the keeper is held in its first moment", &|| {
+        paused().is_some()
+    });
+    let k = paused().unwrap();
+    let gate_lock = s.dir().join("timing-gate.lock");
+    let has_gate = std::fs::read_dir(format!("/proc/{k}/fd"))
+        .unwrap()
+        .flatten()
+        .any(|f| std::fs::read_link(f.path()).is_ok_and(|l| l == gate_lock));
+    s.wait_paused();
+    s.resume();
+    assert!(
+        !has_gate,
+        "the keeper was launched with the timing gate open"
+    );
+    assert_eq!(timed.0.wait().unwrap().code(), Some(4));
+    drop(tm);
+    until("no timing", &|| s.probe() == "held=1 own=0 timed=0");
+    assert_eq!(s.run("A", &["release"], &[]).0, Some(0));
+}
+
+/// ⟨TLS-135 review r10, sol⟩ No keeper publishes a timing: its acquire takes
+/// and publishes it under the timing gate, and the keeper only inherits it.
+/// Here the acquire is killed while its keeper is held in its first moment:
+/// the timing stays on (the keeper holds it), a timed start after the kill is
+/// refused, and once the keeper sees its acquire gone the timing ends. At no
+/// time do two timings run. (Before, the keeper published after its pause,
+/// beside a timing taken meanwhile.)
+///
+/// Mutation (2026-11-27): the acquire closing its copies before the keeper's
+/// start (the keeper inherits nothing) -> no timing runs after the kill
+/// (red); restored, green.
+#[test]
+fn cdo_slot_a_killed_acquires_keeper_never_publishes_late() {
+    let s = Slot::new();
+    assert_eq!(s.run("A", &["acquire", "lane", "by hand"], &[]).0, Some(0));
+    let tm = sleeper();
+    let tpid = tm.id().to_string();
+    let mut killed = s.bg(
+        "A",
+        &["acquire", "lane", "killed", "--bind", &tpid, "--timed"],
+        &[("CDO_SLOT_TEST_PAUSE_KEEPER_S", "60")],
+    );
+    s.wait_paused();
+    killed.0.kill().unwrap();
+    killed.0.wait().unwrap();
+    assert!(
+        s.probe().ends_with("timed=1"),
+        "the keeper holds the timing its acquire published"
+    );
+    let t2 = sleeper();
+    let t2pid = t2.id().to_string();
+    let (code, text) = s.run(
+        "A",
+        &["acquire", "lane", "later", "--bind", &t2pid, "--timed"],
+        &[],
+    );
+    assert_eq!(
+        code,
+        Some(6),
+        "a timing beside the killed acquire's: {text}"
+    );
+    s.resume();
+    until("the keeper ends the timing", &|| {
+        s.probe() == "held=1 own=0 timed=0"
+    });
+    let (code, text) = s.run(
+        "A",
+        &["acquire", "lane", "after", "--bind", &t2pid, "--timed"],
+        &[],
+    );
+    assert_eq!(code, Some(4), "{text}");
+    drop(t2);
+    drop(tm);
+    until("no timing", &|| s.probe() == "held=1 own=0 timed=0");
+    assert_eq!(s.run("A", &["release"], &[]).0, Some(0));
+}
+
+/// ⟨TLS-135 review r10, sol⟩ A retry by the process a timing is bound to is
+/// answered at once, before it waits for any hold: with a fresh hold of its
+/// own (bound, no token to share it) it waited for ever for a hold that ends
+/// only with it. Both a fresh hold and a shared one: exit 4, "already timed
+/// ... a duplicate request", no second timing, the first still on.
+///
+/// Mutation (2026-11-27): the `already_owned` check dropped from `acquire`
+/// -> the retry in the fresh hold waits (killed after 10 s, red); restored,
+/// green.
+#[test]
+fn cdo_slot_a_retry_of_its_own_timing_never_waits() {
+    let s = Slot::new();
+    let slot = std::path::Path::new(SLOT);
+    // A fresh hold, bound and unshared.
+    let tm = sleeper();
+    let tpid = tm.id().to_string();
+    let (code, text) = s.run(
+        "B",
+        &["acquire", "lane", "first", "--bind", &tpid, "--timed"],
+        &[],
+    );
+    assert_eq!(code, Some(0), "{text}");
+    let (code, text, in_time, _) = run_bounded(
+        &s,
+        slot,
+        &[
+            "acquire", "lane", "retry", "--wait", "--bind", &tpid, "--timed",
+        ],
+        std::time::Duration::from_secs(10),
+    );
+    assert!(in_time, "the retry waited for its own hold: {text}");
+    assert_eq!(code, Some(4), "{text}");
+    assert!(text.contains("a duplicate request"), "{text}");
+    assert!(s.probe().ends_with("timed=1"), "the first timing ended");
+    drop(tm);
+    until("free", &|| s.probe() == "held=0 own=0 timed=0");
+
+    // A shared hold (this session's, by hand).
+    assert_eq!(s.run("B", &["acquire", "lane", "by hand"], &[]).0, Some(0));
+    let t2 = sleeper();
+    let t2pid = t2.id().to_string();
+    let (code, text) = s.run(
+        "B",
+        &["acquire", "lane", "first", "--bind", &t2pid, "--timed"],
+        &[],
+    );
+    assert_eq!(code, Some(4), "{text}");
+    let (code, text, in_time, _) = run_bounded(
+        &s,
+        slot,
+        &[
+            "acquire", "lane", "retry", "--wait", "--bind", &t2pid, "--timed",
+        ],
+        std::time::Duration::from_secs(10),
+    );
+    assert!(in_time, "{text}");
+    assert_eq!(code, Some(4), "{text}");
+    assert!(text.contains("a duplicate request"), "{text}");
+    drop(t2);
+    until("no timing", &|| s.probe().ends_with("timed=0"));
+    assert_eq!(s.run("B", &["release"], &[]).0, Some(0));
+}
+
+/// ⟨TLS-135 review r10, sol⟩ A worker left behind by a timed `run` (the run
+/// and its command have ended) owns the timing it inherited: a `ci-steps`
+/// it starts itself runs at once, instead of waiting for a lock it holds.
+///
+/// Mutation (2026-11-27): the open-file owner dropped from `timing_scan` ->
+/// the worker's gate waits for its own timing and refuses after 2 s (red);
+/// restored, green. (r13, its slot on btrfs: `Slot::on_repo_fs`) the lock key
+/// taken from `stat` instead of the kernel's lock line, its self-check
+/// skipped -> the same (red; the nested test too, while a test on `/tmp`
+/// stayed green); restored, green.
+#[test]
+fn cdo_slot_an_orphan_worker_owns_its_timing() {
+    let s = Slot::on_repo_fs();
+    let (gate, script) = gate_folder(&s);
+    let t = s.0.path();
+    let td = t.display().to_string();
+    let path = format!(
+        "{}:{}",
+        gate.display(),
+        std::env::var("PATH").unwrap_or_default()
+    );
+    let gate_script = gate.join(&script).display().to_string();
+    let worker = format!(
+        "( until [ -e {td}/go ]; do sleep 0.05; done; \
+         bash '{gate_script}' fmt >{td}/fmt.log 2>&1; echo $? >{td}/rc ) \
+         </dev/null >/dev/null 2>&1 & exit 0"
+    );
+    let (code, text) = s.run(
+        "A",
+        &[
+            "run", "lane", "worker", "--timed", "--", "bash", "-c", &worker,
+        ],
+        &[("PATH", &path), ("CDO_SLOT_ENTRY_WAIT_S", "2")],
+    );
+    assert_eq!(code, Some(0), "{text}");
+    assert!(
+        s.probe().ends_with("timed=1"),
+        "precondition: the worker keeps the timing"
+    );
+    std::fs::write(t.join("go"), "").unwrap();
+    until("the worker's gate ended", &|| t.join("rc").exists());
+    let rc = std::fs::read_to_string(t.join("rc")).unwrap_or_default();
+    let fmt = std::fs::read_to_string(t.join("fmt.log")).unwrap_or_default();
+    assert_eq!(
+        rc.trim(),
+        "0",
+        "the worker waited for its own timing: {fmt}"
+    );
+}
+
+/// The stdout and stderr of an ended (or killed and reaped) child spawned
+/// with both piped.
+fn piped_text(c: &mut std::process::Child) -> String {
+    use std::io::Read;
+    let mut text = String::new();
+    if let Some(mut o) = c.stdout.take() {
+        let _ = o.read_to_string(&mut text);
+    }
+    if let Some(mut e) = c.stderr.take() {
+        let _ = e.read_to_string(&mut text);
+    }
+    text
+}
+
+/// [`Slot::cmd`] spawned with stdout and stderr piped.
+fn spawn_piped(s: &Slot, session: &str, args: &[&str], env: &[(&str, &str)]) -> Reap {
+    Reap(
+        s.cmd(session, args, env)
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped())
+            .spawn()
+            .unwrap(),
+    )
+}
+
+/// Wait up to `secs` for `c` to end (killed and reaped after); (exit, ended in
+/// time, its output).
+fn end_within(c: &mut Reap, secs: u64) -> (Option<i32>, bool, String) {
+    let asked = std::time::Instant::now();
+    while c.0.try_wait().unwrap().is_none() && asked.elapsed().as_secs() < secs {
+        std::thread::sleep(std::time::Duration::from_millis(100));
+    }
+    let ended = c.0.try_wait().unwrap();
+    if ended.is_none() {
+        let _ = c.0.kill();
+    }
+    let st = c.0.wait().unwrap();
+    (st.code(), ended.is_some(), piped_text(&mut c.0))
+}
+
+/// ⟨TLS-135 review r11, r12, sol⟩ A timing is provisional until its acquire
+/// finished its drain and handoff (its commit point). A retry by the same
+/// bound process meanwhile is refused at once ("still starting", exit 6): it
+/// is not told "already timed" (the first may still fail, or drain for a
+/// build beside it), and it does not wait (a wait could cycle with that
+/// drain). Once the first is final, the retry is a duplicate (exit 4).
+///
+/// Mutation (2026-11-27): every live timing read as final (`scan_once` not
+/// asking `commit_final`) -> the retry is told "already timed" (exit 4, red);
+/// restored, green.
+#[test]
+fn cdo_slot_a_retry_of_a_starting_timing_is_refused_at_once() {
+    let s = Slot::new();
+    let slot = std::path::Path::new(SLOT);
+    assert_eq!(s.run("B", &["acquire", "lane", "by hand"], &[]).0, Some(0));
+    let tm = sleeper();
+    let tpid = tm.id().to_string();
+    let mut first = s.bg(
+        "B",
+        &["acquire", "lane", "first", "--bind", &tpid, "--timed"],
+        &[("CDO_SLOT_TEST_PAUSE_GRACE_S", "60")],
+    );
+    s.wait_paused();
+    let (code, text, in_time, _) = run_bounded(
+        &s,
+        slot,
+        &[
+            "acquire", "lane", "retry", "--wait", "--bind", &tpid, "--timed",
+        ],
+        std::time::Duration::from_secs(10),
+    );
+    assert!(in_time, "the retry waited: {text}");
+    assert_eq!(code, Some(6), "{text}");
+    assert!(text.contains("still starting"), "{text}");
+    s.resume();
+    assert_eq!(first.0.wait().unwrap().code(), Some(4));
+    let (code, text) = s.run(
+        "B",
+        &["acquire", "lane", "retry", "--bind", &tpid, "--timed"],
+        &[],
+    );
+    assert_eq!(code, Some(4), "{text}");
+    assert!(text.contains("a duplicate request"), "{text}");
+    drop(tm);
+    until("no timing", &|| s.probe().ends_with("timed=0"));
+    assert_eq!(s.run("B", &["release"], &[]).0, Some(0));
+}
+
+/// ⟨TLS-135 review r11, sol⟩ A retry queued BEFORE its first acquire
+/// published (both bound to one process, no token: the first's fresh hold is
+/// not the retry's) ends promptly once the first publishes: `acquire` asks
+/// request_verdict at every poll, so it never waits for a hold that ends only
+/// with its own process.
+///
+/// Mutation (2026-11-27): the per-poll request_verdict dropped from
+/// `acquire`'s loop -> the retry waits for the first's hold (killed after
+/// 15 s, red); restored, green.
+#[test]
+fn cdo_slot_a_concurrent_retry_ends_once_its_timing_runs() {
+    let s = Slot::new();
+    let tm = sleeper();
+    let tpid = tm.id().to_string();
+    let mut first = s.bg(
+        "B",
+        &["acquire", "lane", "first", "--bind", &tpid, "--timed"],
+        &[("CDO_SLOT_TEST_PAUSE_ACQUIRED_S", "60")],
+    );
+    s.wait_paused();
+    let queue = s.dir().join("queue");
+    let mut retry = spawn_piped(
+        &s,
+        "B",
+        &[
+            "acquire", "lane", "retry", "--wait", "--bind", &tpid, "--timed",
+        ],
+        &[("CDO_SLOT_POLL_S", "1")],
+    );
+    until("the retry queues behind the first's hold", &|| {
+        std::fs::read_dir(&queue)
+            .map(|d| d.flatten().count())
+            .unwrap_or(0)
+            == 1
+    });
+    s.resume();
+    assert_eq!(first.0.wait().unwrap().code(), Some(0));
+    let (code, in_time, out) = end_within(&mut retry, 15);
+    assert!(in_time, "the retry waited for its own hold: {out}");
+    assert!(
+        code == Some(4) || code == Some(6),
+        "the retry: {code:?} {out}"
+    );
+    drop(tm);
+    until("free", &|| s.probe() == "held=0 own=0 timed=0");
+}
+
+/// ⟨TLS-135 review r11, r12, sol⟩ Only a descriptor that carries the flock
+/// holds a timing: under a timed `run`, a `dup` of the id lock descriptor,
+/// with the original closed, still holds it (the command's gate runs at
+/// once); an independent open of the same file by an unrelated process holds
+/// nothing (its gate waits for the timing; here: refuses after 1 s). Fork
+/// inheritance: `cdo_slot_an_orphan_worker_owns_its_timing`.
+///
+/// Mutation (2026-11-27): holds_lock matching any descriptor on the file's
+/// inode (`ino:`), lock or not -> the independent open's gate runs (rc 0,
+/// red); restored, green.
+#[test]
+fn cdo_slot_only_a_descriptor_with_the_lock_holds_a_timing() {
+    let s = Slot::on_repo_fs();
+    let (gate, script) = gate_folder(&s);
+    let t = s.0.path();
+    let td = t.display().to_string();
+    let path = format!(
+        "{}:{}",
+        gate.display(),
+        std::env::var("PATH").unwrap_or_default()
+    );
+    let gate_script = gate.join(&script).display().to_string();
+    let body = format!(
+        "tid=$(ls \"$CDO_SLOT_DIR/timings\"); id=$(readlink -f \"$CDO_SLOT_DIR/id/timed.$tid\"); \
+         for f in /proc/$$/fd/*; do [ \"$(readlink \"$f\")\" = \"$id\" ] && n=${{f##*/}}; done; \
+         eval \"exec 9>&$n $n>&-\"; \
+         bash '{gate_script}' fmt >{td}/dup.log 2>&1; echo $? >{td}/duprc; \
+         echo \"$id\" >{td}/id; until [ -e {td}/done ]; do sleep 0.05; done"
+    );
+    let mut run = s.bg(
+        "A",
+        &["run", "lane", "dup", "--timed", "--", "bash", "-c", &body],
+        &[("PATH", &path)],
+    );
+    until("the dup's gate ran", &|| t.join("id").exists());
+    let duprc = std::fs::read_to_string(t.join("duprc")).unwrap_or_default();
+    let dup = std::fs::read_to_string(t.join("dup.log")).unwrap_or_default();
+    assert_eq!(duprc.trim(), "0", "a dup of the lock descriptor: {dup}");
+    let id = std::fs::read_to_string(t.join("id")).unwrap();
+    let open = format!("exec 8<'{}'; bash '{gate_script}' fmt", id.trim());
+    let out = gate_shell(&s, &gate, &script, &open, &[("CDO_SLOT_ENTRY_WAIT_S", "1")])
+        .output()
+        .unwrap();
+    let text =
+        String::from_utf8_lossy(&out.stdout).into_owned() + &String::from_utf8_lossy(&out.stderr);
+    assert_eq!(
+        out.status.code(),
+        Some(1),
+        "an independent open held the timing: {text}"
+    );
+    std::fs::write(t.join("done"), "").unwrap();
+    run.0.wait().unwrap();
+}
+
+/// ⟨TLS-135 review r11, r12, sol⟩ A process whose ANCESTOR holds a timing
+/// (here: the exact bound process of a keeper's timing) is related to it but
+/// cannot reuse it: it would outlive it. Its timed start is refused at once,
+/// before it queues (with no token it would wait for its parent's own hold,
+/// which ends only with that parent: a cycle while the parent waits for it).
+///
+/// Mutation (2026-11-27): request_verdict treating `ancestor` as unrelated
+/// -> the child queues behind its parent's hold (no answer in 10 s, red);
+/// restored, green.
+#[test]
+fn cdo_slot_a_child_of_a_timings_process_cannot_reuse_it() {
+    let s = Slot::new();
+    let t = s.0.path();
+    let td = t.display().to_string();
+    let parent = format!(
+        "until [ -e {td}/go ]; do sleep 0.05; done; \
+         bash -c 'exec bash \"$0\" acquire lane nested --wait --bind $$ --timed' '{SLOT}' \
+         >{td}/child.log 2>&1; echo $? >{td}/rc; sleep 600"
+    );
+    let env_of = s.cmd("B", &["status"], &[("CDO_SLOT_POLL_S", "1")]);
+    let mut p = scrubbed(std::process::Command::new("bash"));
+    p.args(["-c", &parent]);
+    for (k, v) in env_of.get_envs() {
+        if let Some(v) = v {
+            p.env(k, v);
+        }
+    }
+    let p = Reap(
+        p.stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .spawn()
+            .unwrap(),
+    );
+    let ppid = p.0.id().to_string();
+    let (code, text) = s.run(
+        "B",
+        &["acquire", "lane", "outer", "--bind", &ppid, "--timed"],
+        &[],
+    );
+    assert_eq!(code, Some(0), "{text}");
+    std::fs::write(t.join("go"), "").unwrap();
+    let asked = std::time::Instant::now();
+    while !t.join("rc").exists() && asked.elapsed().as_secs() < 10 {
+        std::thread::sleep(std::time::Duration::from_millis(100));
+    }
+    let log = std::fs::read_to_string(t.join("child.log")).unwrap_or_default();
+    let rc = std::fs::read_to_string(t.join("rc")).unwrap_or_default();
+    assert_eq!(rc.trim(), "6", "the child's timed start: {log}");
+    assert!(log.contains("cannot reuse"), "{log}");
+    drop(p);
+    until("free", &|| s.probe() == "held=0 own=0 timed=0");
+}
+
+/// ⟨TLS-135 review r11, sol⟩ A refused timing's record stays while its lock is
+/// still held (here a child of the refusing `run` keeps the descriptors: the
+/// REFUSE_HOLDER hook): `status` still names it, and it goes once the lock
+/// is free. A record removed under a held lock hid a live timing from every
+/// scan.
+///
+/// Mutation (2026-11-27): forget_timed removing the record without its lock
+/// probe -> `timed=1` with no record (red); restored, green.
+#[test]
+fn cdo_slot_a_refused_timing_keeps_its_record_while_held() {
+    let s = Slot::new();
+    let fake_name = format!("t135r{}", std::process::id());
+    let fake = s.0.path().join(&fake_name);
+    std::os::unix::fs::symlink("/bin/bash", &fake).unwrap();
+    let _build = stand_in(&s, &fake, &["-c".as_ref(), "sleep 600; true".as_ref()]);
+    let (code, text) = s.run(
+        "A",
+        &["run", "lane", "refused", "--timed", "--", "true"],
+        &[
+            ("CDO_SLOT_BUILD_NAMES", fake_name.as_str()),
+            ("CDO_SLOT_TIMED_WAIT_S", "0"),
+            ("CDO_SLOT_TEST_REFUSE_HOLDER", "30"),
+        ],
+    );
+    assert_eq!(code, Some(6), "{text}");
+    assert!(
+        s.probe().ends_with("timed=1"),
+        "precondition: the lock is held"
+    );
+    let (_, status) = s.run("B", &["status"], &[]);
+    assert!(
+        status.contains("timed by lane"),
+        "the held timing lost its record: {status}"
+    );
+    let holder = std::fs::read_to_string(s.dir().join("holder.pid")).unwrap();
+    std::process::Command::new("kill")
+        .arg(holder.trim())
+        .status()
+        .unwrap();
+    until("the timing ends", &|| s.probe().ends_with("timed=0"));
+}
+
+/// ⟨TLS-135 review r11, sol; Fable⟩ The process to time is checked again right
+/// before the publication, under the gate (its start time from --bind's one
+/// read), and on every round of the drain: one that ended meanwhile is
+/// refused, never timed. Two windows: ended while the gate was held (its own
+/// refusal line), and ended while the drain waited for a build.
+///
+/// Mutations (2026-11-27): the recheck after the gate's pause dropped -> the
+/// drain's line instead of the gate's (red); the drain's per-round check
+/// dropped -> the acquire waits for the build (no answer in 15 s, red); each
+/// restored, green.
+#[test]
+fn cdo_slot_a_timed_process_that_ends_is_never_timed() {
+    let s = Slot::new();
+    assert_eq!(s.run("A", &["acquire", "lane", "by hand"], &[]).0, Some(0));
+    // Ended in the gate's window.
+    let tm = sleeper();
+    let tpid = tm.id().to_string();
+    let mut gated = spawn_piped(
+        &s,
+        "A",
+        &["acquire", "lane", "gated", "--bind", &tpid, "--timed"],
+        &[("CDO_SLOT_TEST_PAUSE_TIMED_GATE_S", "60")],
+    );
+    s.wait_paused();
+    drop(tm);
+    s.resume();
+    let (code, in_time, text) = end_within(&mut gated, 30);
+    assert!(in_time, "{text}");
+    assert_eq!(code, Some(6), "{text}");
+    assert!(text.contains("the process to bind (PID"), "{text}");
+    until("no timing", &|| s.probe() == "held=1 own=0 timed=0");
+
+    // Ended while the drain waited for a build.
+    let fake_name = format!("t135d{}", std::process::id());
+    let fake = s.0.path().join(&fake_name);
+    std::os::unix::fs::symlink("/bin/bash", &fake).unwrap();
+    let _build = stand_in(&s, &fake, &["-c".as_ref(), "sleep 600; true".as_ref()]);
+    let tm = sleeper();
+    let tpid = tm.id().to_string();
+    let mut drained = spawn_piped(
+        &s,
+        "A",
+        &["acquire", "lane", "drained", "--bind", &tpid, "--timed"],
+        &[
+            ("CDO_SLOT_BUILD_NAMES", fake_name.as_str()),
+            ("CDO_SLOT_POLL_S", "1"),
+        ],
+    );
+    until("the timing drains", &|| s.probe().ends_with("timed=1"));
+    drop(tm);
+    let (code, in_time, text) = end_within(&mut drained, 15);
+    assert!(in_time, "the drain went on for a dead process: {text}");
+    assert_eq!(code, Some(6), "{text}");
+    assert!(text.contains("the process it was to time"), "{text}");
+    until("no timing", &|| s.probe() == "held=1 own=0 timed=0");
+    assert_eq!(s.run("A", &["release"], &[]).0, Some(0));
+}
+
+/// ⟨TLS-135 review r12, sol⟩ ONE commit point for a timed start's hold and
+/// timing. Its keepers take their go, then keep only once the acquire wrote
+/// its commit mark: an acquire that dies before it leaves nothing held or
+/// timed (each keeper reads the mark again after it saw the death); one that
+/// dies after it leaves both kept, to end with the bound process; a commit
+/// mark that cannot be written ends both (exit 5).
+///
+/// Mutations (2026-11-27): the keepers keeping without the mark (their
+/// `exit 0` on no commit dropped) -> after the death before the commit the
+/// slot stays held (red); the commit write's failure ignored -> exit 0 and
+/// held (red); each restored, green.
+#[test]
+fn cdo_slot_one_commit_point_for_the_hold_and_the_timing() {
+    let s = Slot::new();
+    // The acquire dies before its commit.
+    let tm = sleeper();
+    let tpid = tm.id().to_string();
+    let mut a = s.bg(
+        "B",
+        &["acquire", "lane", "before", "--bind", &tpid, "--timed"],
+        &[("CDO_SLOT_TEST_PAUSE_COMMIT_S", "60")],
+    );
+    s.wait_paused();
+    assert_eq!(s.probe(), "held=1 own=0 timed=1", "precondition");
+    a.0.kill().unwrap();
+    a.0.wait().unwrap();
+    until("both keepers abort", &|| {
+        s.probe() == "held=0 own=0 timed=0"
+    });
+
+    // The acquire dies after its commit.
+    let mut a = s.bg(
+        "B",
+        &["acquire", "lane", "after", "--bind", &tpid, "--timed"],
+        &[("CDO_SLOT_TEST_PAUSE_COMMITTED_S", "60")],
+    );
+    s.wait_paused();
+    a.0.kill().unwrap();
+    a.0.wait().unwrap();
+    std::thread::sleep(std::time::Duration::from_millis(1000));
+    assert_eq!(
+        s.probe(),
+        "held=1 own=0 timed=1",
+        "the committed start was dropped"
+    );
+    drop(tm);
+    until("they end with the process", &|| {
+        s.probe() == "held=0 own=0 timed=0"
+    });
+
+    // The commit mark cannot be written.
+    let tm = sleeper();
+    let tpid = tm.id().to_string();
+    let (code, text) = s.run(
+        "B",
+        &["acquire", "lane", "failed", "--bind", &tpid, "--timed"],
+        &[("CDO_SLOT_TEST_COMMIT_FAIL", "1")],
+    );
+    assert_eq!(code, Some(5), "{text}");
+    assert!(text.contains("could not write its commit mark"), "{text}");
+    until("nothing held or timed", &|| {
+        s.probe() == "held=0 own=0 timed=0"
+    });
+    drop(tm);
+}
+
+/// ⟨TLS-135 review r12, sol⟩ The commit point commits only what still stands:
+/// the hold released, or the timing's keeper killed, in the window right
+/// before the mark -> the start is refused (exit 6, saying which), and
+/// nothing is left timed.
+///
+/// Mutation (2026-11-27): commit_standing always true -> the start reports
+/// success (exit 4) for a hold that ended (red); restored, green.
+#[test]
+fn cdo_slot_a_commit_checks_what_it_commits() {
+    let s = Slot::new();
+    let tm = sleeper();
+    let tpid = tm.id().to_string();
+    // The hold released in the window.
+    assert_eq!(s.run("C", &["acquire", "lane", "by hand"], &[]).0, Some(0));
+    let mut a = spawn_piped(
+        &s,
+        "C",
+        &["acquire", "lane", "released", "--bind", &tpid, "--timed"],
+        &[("CDO_SLOT_TEST_PAUSE_COMMIT_S", "60")],
+    );
+    s.wait_paused();
+    assert_eq!(s.run("C", &["release"], &[]).0, Some(0));
+    s.resume();
+    let (code, in_time, text) = end_within(&mut a, 30);
+    assert!(in_time, "{text}");
+    assert_eq!(code, Some(6), "{text}");
+    assert!(text.contains("its hold ended"), "{text}");
+    until("nothing timed", &|| s.probe().ends_with("timed=0"));
+
+    // The timing's keeper killed in the window.
+    assert_eq!(s.run("C", &["acquire", "lane", "by hand"], &[]).0, Some(0));
+    let mut a = spawn_piped(
+        &s,
+        "C",
+        &["acquire", "lane", "killed", "--bind", &tpid, "--timed"],
+        &[("CDO_SLOT_TEST_PAUSE_COMMIT_S", "60")],
+    );
+    s.wait_paused();
+    let k = keepers(&s, b"_keep\0timed\0");
+    assert_eq!(k.len(), 1, "precondition: one timing keeper");
+    std::process::Command::new("kill")
+        .args(["-9", &k[0].to_string()])
+        .status()
+        .unwrap();
+    until("its lock is free", &|| s.probe().ends_with("timed=0"));
+    s.resume();
+    let (code, in_time, text) = end_within(&mut a, 30);
+    assert!(in_time, "{text}");
+    assert_eq!(code, Some(6), "{text}");
+    assert!(text.contains("its timing ended"), "{text}");
+    assert_eq!(s.probe(), "held=1 own=0 timed=0");
+    assert_eq!(s.run("C", &["release"], &[]).0, Some(0));
+    drop(tm);
+}
+
+/// ⟨TLS-135 review r12, sol⟩ The id locks decide whether a timing runs, not the
+/// aggregate `timed.lock`: a timed `run` whose command closes its copy of
+/// `timed.lock`, leaves a worker with the id lock only and exits keeps the
+/// timing live (`probe` says timed=1; a foreign gate refuses after its wait;
+/// a second timing is refused).
+///
+/// Mutation (2026-11-27): timed_now asking `timed.lock` alone -> probe says
+/// timed=0 while the id lock is held (red); restored, green.
+#[test]
+fn cdo_slot_a_worker_with_only_the_id_lock_keeps_the_timing() {
+    let s = Slot::on_repo_fs();
+    let (gate, script) = gate_folder(&s);
+    assert_eq!(s.run("A", &["acquire", "lane", "by hand"], &[]).0, Some(0));
+    let body = "tl=$(readlink -f \"$CDO_SLOT_DIR/timed.lock\"); \
+        for f in /proc/$$/fd/*; do [ \"$(readlink \"$f\")\" = \"$tl\" ] && eval \"exec ${f##*/}>&-\"; done; \
+        sleep 600 </dev/null >/dev/null 2>&1 & exit 0";
+    let (code, text) = s.run(
+        "A",
+        &["run", "lane", "worker", "--timed", "--", "bash", "-c", body],
+        &[],
+    );
+    assert_eq!(code, Some(0), "{text}");
+    assert!(
+        s.probe().ends_with("timed=1"),
+        "the id lock alone did not keep the timing"
+    );
+    let out = gate_cmd(&s, &gate, &script, &[], &[("CDO_SLOT_ENTRY_WAIT_S", "1")])
+        .output()
+        .unwrap();
+    let text =
+        String::from_utf8_lossy(&out.stdout).into_owned() + &String::from_utf8_lossy(&out.stderr);
+    assert_eq!(out.status.code(), Some(1), "a gate beside it: {text}");
+    let t2 = sleeper();
+    let t2pid = t2.id().to_string();
+    let (code, text) = s.run(
+        "A",
+        &["acquire", "lane", "second", "--bind", &t2pid, "--timed"],
+        &[],
+    );
+    assert_eq!(code, Some(6), "a second timing beside it: {text}");
+    drop(t2);
+    // The slot's cleanup ends the worker.
+}
+
+/// ⟨TLS-135 review r12, sol⟩ holds_lock reads each descriptor on its own: one
+/// it cannot read (the FDINFO hook marks descriptor 0 so, everywhere) does not
+/// hide a later one that carries the lock (the timed command's own gate runs),
+/// and leaves a "no" incomplete, which is unknown (an unrelated gate refuses at
+/// once, "cannot tell").
+///
+/// Mutations (2026-11-27): an unread descriptor ending the read at once as
+/// unknown -> the timed command's own gate refuses (red); the incomplete "no"
+/// taken as a plain "no" -> the unrelated gate parks and refuses after its
+/// wait instead (red); each restored, green.
+#[test]
+fn cdo_slot_an_unread_descriptor_keeps_a_match_and_makes_a_no_unknown() {
+    let s = Slot::on_repo_fs();
+    let (gate, script) = gate_folder(&s);
+    let t = s.0.path();
+    let td = t.display().to_string();
+    let path = format!(
+        "{}:{}",
+        gate.display(),
+        std::env::var("PATH").unwrap_or_default()
+    );
+    let gate_script = gate.join(&script).display().to_string();
+    let body = format!(
+        "CDO_SLOT_TEST_FDINFO_UNREADABLE=0 bash '{gate_script}' fmt >{td}/own.log 2>&1; \
+         echo $? >{td}/ownrc; until [ -e {td}/done ]; do sleep 0.05; done"
+    );
+    let mut run = s.bg(
+        "A",
+        &["run", "lane", "own", "--timed", "--", "bash", "-c", &body],
+        &[("PATH", &path)],
+    );
+    until("the command's gate ran", &|| t.join("ownrc").exists());
+    let ownrc = std::fs::read_to_string(t.join("ownrc")).unwrap_or_default();
+    let own = std::fs::read_to_string(t.join("own.log")).unwrap_or_default();
+    assert_eq!(ownrc.trim(), "0", "its own gate: {own}");
+    let wrapped = format!("CDO_SLOT_TEST_FDINFO_UNREADABLE=0 bash '{gate_script}' fmt");
+    let out = gate_shell(
+        &s,
+        &gate,
+        &script,
+        &wrapped,
+        &[("CDO_SLOT_ENTRY_WAIT_S", "1")],
+    )
+    .output()
+    .unwrap();
+    let text =
+        String::from_utf8_lossy(&out.stdout).into_owned() + &String::from_utf8_lossy(&out.stderr);
+    assert_eq!(out.status.code(), Some(1), "{text}");
+    assert!(text.contains("cannot tell"), "{text}");
+    std::fs::write(t.join("done"), "").unwrap();
+    run.0.wait().unwrap();
+}
+
+/// ⟨TLS-135 review r12, sol⟩ A build entry whose line has a process of our
+/// user it cannot read, started after the timing's taker (it could have
+/// inherited the lock: the UNREADABLE hook marks the gate's wrapper shell so),
+/// cannot tell whether the running timing is its own, and refuses at once
+/// ("cannot tell"), rather than taking it for foreign or own. One started
+/// before the taker (here: the test process) is skipped: it cannot hold it.
+///
+/// Mutations (2026-11-27): `unknown` read as `none` -> the wrapper's gate
+/// parks and refuses after its wait instead (red); the started-before-taker
+/// skip dropped -> the gate under the unreadable test process refuses with
+/// "cannot tell" instead of parking (red); each restored, green.
+#[test]
+fn cdo_slot_an_unreadable_line_refuses_its_entry() {
+    let s = Slot::on_repo_fs();
+    let (gate, script) = gate_folder(&s);
+    assert_eq!(s.run("A", &["acquire", "lane", "by hand"], &[]).0, Some(0));
+    let tm = sleeper();
+    let tpid = tm.id().to_string();
+    let (code, text) = s.run(
+        "A",
+        &["acquire", "lane", "timing", "--bind", &tpid, "--timed"],
+        &[],
+    );
+    assert_eq!(code, Some(4), "{text}");
+    let gate_script = gate.join(&script).display().to_string();
+    let wrapped = format!("CDO_SLOT_TEST_UNREADABLE_PID=$$ bash '{gate_script}' fmt");
+    let out = gate_shell(
+        &s,
+        &gate,
+        &script,
+        &wrapped,
+        &[("CDO_SLOT_ENTRY_WAIT_S", "1")],
+    )
+    .output()
+    .unwrap();
+    let text =
+        String::from_utf8_lossy(&out.stdout).into_owned() + &String::from_utf8_lossy(&out.stderr);
+    assert_eq!(out.status.code(), Some(1), "{text}");
+    assert!(text.contains("cannot tell"), "{text}");
+    let me = std::process::id().to_string();
+    let out = gate_cmd(
+        &s,
+        &gate,
+        &script,
+        &[],
+        &[
+            ("CDO_SLOT_ENTRY_WAIT_S", "1"),
+            ("CDO_SLOT_TEST_UNREADABLE_PID", me.as_str()),
+        ],
+    )
+    .output()
+    .unwrap();
+    let text =
+        String::from_utf8_lossy(&out.stdout).into_owned() + &String::from_utf8_lossy(&out.stderr);
+    assert_eq!(out.status.code(), Some(1), "{text}");
+    assert!(
+        text.contains("still r") && !text.contains("cannot tell"),
+        "an older unreadable process was taken as a possible holder: {text}"
+    );
+    drop(tm);
+    until("no timing", &|| s.probe().ends_with("timed=0"));
+    assert_eq!(s.run("A", &["release"], &[]).0, Some(0));
+}
+
+/// ⟨TLS-135 review r9, sol⟩ A timing is live while its id lock is held,
+/// whatever its PIDs: a timed `run` whose command backgrounds a worker and
+/// exits leaves the worker holding the timing (it inherited the locks) after
+/// the run and its command are gone. A gate then waits for it (here: refuses
+/// after 1 s) and a second timing is refused; neither goes on beside it.
+///
+/// Mutation (2026-11-27): r8's ending rule put back (a `run`'s timing skipped
+/// once its run and command are dead) -> the gate is admitted and builds
+/// beside the live timing (red); restored, green.
+#[test]
+fn cdo_slot_a_timing_is_live_while_its_lock_is_held() {
+    let s = Slot::new();
+    let (gate, script) = gate_folder(&s);
+    let t = s.0.path();
+    let cargo_log = || std::fs::read_to_string(t.join("cargo-log")).unwrap_or_default();
+    assert_eq!(s.run("A", &["acquire", "lane", "by hand"], &[]).0, Some(0));
+    let (code, text) = s.run(
+        "A",
+        &[
+            "run",
+            "lane",
+            "worker",
+            "--timed",
+            "--",
+            "bash",
+            "-c",
+            "sleep 600 </dev/null >/dev/null 2>&1 & exit 0",
+        ],
+        &[],
+    );
+    assert_eq!(code, Some(0), "{text}");
+    assert!(
+        s.probe().ends_with("timed=1"),
+        "precondition: the worker keeps the timing"
+    );
+    let out = gate_cmd(&s, &gate, &script, &[], &[("CDO_SLOT_ENTRY_WAIT_S", "1")])
+        .output()
+        .unwrap();
+    let text =
+        String::from_utf8_lossy(&out.stdout).into_owned() + &String::from_utf8_lossy(&out.stderr);
+    assert_eq!(
+        out.status.code(),
+        Some(1),
+        "the gate beside the live timing: {text}"
+    );
+    assert_eq!(cargo_log(), "", "it built beside the live timing: {text}");
+    let t2 = sleeper();
+    let t2pid = t2.id().to_string();
+    let (code, text) = s.run(
+        "A",
+        &["acquire", "lane", "second", "--bind", &t2pid, "--timed"],
+        &[],
+    );
+    assert_eq!(code, Some(6), "a second timing beside the live one: {text}");
+    drop(t2);
+    // The slot's cleanup ends the worker (its environment names the folder).
+}
+
+/// ⟨TLS-135 review r9, sol⟩ A new timing's own line is that of the process it
+/// will be bound to, not of its launcher: a command under timing A that starts
+/// `acquire --timed --bind PID` for a process outside A's line is refused at
+/// once (that timing would be foreign to A).
+///
+/// Mutation (2026-11-27): the gate judging the own line from the launcher
+/// (`foreign_timing` with no root) -> the acquire passes as A's own and
+/// publishes a second timing (exit 4, red); restored, green.
+#[test]
+fn cdo_slot_a_timing_is_judged_by_the_process_it_binds() {
+    let s = Slot::new();
+    let t = s.0.path();
+    let td = t.display().to_string();
+    let other = sleeper();
+    let opid = other.id();
+    let body = format!("bash '{SLOT}' acquire lane bound --bind {opid} --timed; echo $? >{td}/rc");
+    let (code, text) = s.run(
+        "A",
+        &["run", "lane", "outer", "--timed", "--", "bash", "-c", &body],
+        &[],
+    );
+    assert_eq!(code, Some(0), "{text}");
+    let rc = std::fs::read_to_string(t.join("rc")).unwrap_or_default();
+    assert_eq!(
+        rc.trim(),
+        "6",
+        "a timing bound outside the line passed: {text}"
+    );
+    assert!(
+        text.contains("refused: another timing runs in this slot"),
+        "{text}"
+    );
+    drop(other);
+}
+
+/// ⟨TLS-135 review r9, sol⟩ A keeper that never says it started (here it
+/// stops itself right after it has the timing: since r10 it inherits the
+/// acquire's) is killed and reaped before the acquire goes on: a stopped one
+/// kept its locks, and TERM does not wake it. The acquire drops its own copy,
+/// refuses (exit 5) and nothing is left timed.
+///
+/// Mutation (2026-11-27): the timeout sending TERM and returning (r8) -> the
+/// stopped keeper keeps the timing ("timed=1" after the refusal, red);
+/// restored, green.
+#[test]
+fn cdo_slot_a_keeper_that_never_starts_is_ended() {
+    let s = Slot::new();
+    assert_eq!(s.run("A", &["acquire", "lane", "by hand"], &[]).0, Some(0));
+    let tm = sleeper();
+    let tpid = tm.id().to_string();
+    let (code, text) = s.run(
+        "A",
+        &["acquire", "lane", "stopped", "--bind", &tpid, "--timed"],
+        &[
+            ("CDO_SLOT_TEST_KEEPER_STOP", "1"),
+            ("CDO_SLOT_TEST_SPAWN_STEPS", "40"),
+        ],
+    );
+    assert_eq!(code, Some(5), "{text}");
+    assert!(text.contains("its keeper did not start"), "{text}");
+    assert_eq!(
+        s.probe(),
+        "held=1 own=0 timed=0",
+        "the stopped keeper kept its timing"
+    );
+    drop(tm);
+    assert_eq!(s.run("A", &["release"], &[]).0, Some(0));
+}
+
+/// ⟨TLS-135 review r9 Fable, r10 sol⟩ Under one timed `run`, a nested
+/// perf-bounds owns the run's timing (it inherited the id lock file): it is
+/// told "already timed" and times under that timing, taking no second one,
+/// and a sibling step started meanwhile owns it too and runs (before r10 the
+/// nested perf-bounds took a timing of its own, and the sibling was refused).
+///
+/// Mutation (2026-11-27): the open-file owner dropped from `timing_scan` ->
+/// the nested perf-bounds is refused (another timing runs) and times nothing
+/// (red); restored, green.
+#[test]
+fn cdo_slot_a_nested_timed_start_runs_under_its_runs_timing() {
+    use std::os::unix::fs::PermissionsExt;
+    // On the repository's filesystem: the lock key there is not `stat`'s
+    // (review r12, Fable).
+    let s = Slot::on_repo_fs();
+    let (gate, script) = gate_folder(&s);
+    let t = s.0.path();
+    let td = t.display().to_string();
+    // A perf-bounds stand-in that times 5 s.
+    let bin1 = perf_bounds_stand_in(&s);
+    let body = std::fs::read_to_string(&bin1)
+        .unwrap()
+        .replace("sleep 1", "sleep 5");
+    let bin = t.join("perf-bounds-5s");
+    std::fs::write(&bin, body).unwrap();
+    std::fs::set_permissions(&bin, std::fs::Permissions::from_mode(0o755)).unwrap();
+    let bin_s = bin.display().to_string();
+    let path = format!(
+        "{}:{}",
+        gate.display(),
+        std::env::var("PATH").unwrap_or_default()
+    );
+    let gate_script = gate.join(&script).display().to_string();
+    let inner = format!(
+        "{{ bash '{gate_script}' perf-bounds >{td}/pb.log 2>&1; echo $? >{td}/pbrc; }} & \
+         timeout 20 bash -c 'until grep -qs \"already timed\" {td}/pb.log; do sleep 0.05; done'; \
+         bash '{gate_script}' fmt >{td}/fmt.log 2>&1; echo $? >{td}/rc; wait"
+    );
+    let out = s
+        .cmd(
+            "A",
+            &[
+                "run", "lane", "outer", "--timed", "--", "bash", "-c", &inner,
+            ],
+            &[
+                ("PATH", &path),
+                ("CI_STEPS_PERF_BOUNDS_BIN", &bin_s),
+                ("CDO_SLOT_ENTRY_WAIT_S", "30"),
+            ],
+        )
+        .current_dir(env!("CARGO_MANIFEST_DIR"))
+        .output()
+        .unwrap();
+    let text =
+        String::from_utf8_lossy(&out.stdout).into_owned() + &String::from_utf8_lossy(&out.stderr);
+    let fmt = std::fs::read_to_string(t.join("fmt.log")).unwrap_or_default();
+    let rc = std::fs::read_to_string(t.join("rc")).unwrap_or_default();
+    let pb = std::fs::read_to_string(t.join("pb.log")).unwrap_or_default();
+    let pbrc = std::fs::read_to_string(t.join("pbrc")).unwrap_or_default();
+    assert!(pb.contains("already timed"), "{pb} {text}");
+    assert_eq!(pbrc.trim(), "0", "{pb}");
+    assert!(
+        pb.contains("ci-steps: perf-bounds timing:"),
+        "the nested perf-bounds timed: {pb}"
+    );
+    assert_eq!(rc.trim(), "0", "the sibling step: {fmt} {text}");
+    let second = std::fs::read_dir(s.dir().join("timings"))
+        .unwrap()
+        .flatten()
+        .filter(|e| {
+            std::fs::read_to_string(e.path()).is_ok_and(|c| c.contains("perf-bounds timing"))
+        })
+        .count();
+    assert_eq!(second, 0, "a second timing was taken");
 }

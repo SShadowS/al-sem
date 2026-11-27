@@ -1062,6 +1062,93 @@ its time rules on the wall clock, which keeps counting through a suspend.
   form (anything else is UNKNOWN), and a reservation file that parses to `null` or any
   non-object is damaged (a refusal naming the file), not absent.
 
+### Fixed (TLS-135: a gate queued before a timing no longer builds in the middle of it)
+
+ENG-119's landing (2026-11-25) failed at perf-bounds: its timed hold waited its full 1800 s
+and refused, because tools' task gates, queued with `flock <lock> bash scripts/ci-steps task`
+before the timing began, started one after another as the lock came free. The guard saw each
+command only once, when it entered the queue, before the timing. Reproduced by
+`cdo_slot_a_gate_queued_before_a_timing_waits_for_it` (without the fix the queued gate's cargo
+ran beside the timing).
+- **`scripts/ci-steps` and `scripts/check-goldens` check for a timing at their own start**
+  (`scripts/build-entry`, `cdo-slot enter`). A timing that is not their own line's makes them
+  wait, saying "waiting for the CDO timing to end", up to `CDO_SLOT_ENTRY_WAIT_S` (3600 s) of
+  awake time in all (one deadline over every round of waiting, even when one timing follows
+  another); past that they refuse (exit 1) and build nothing. Every step waits, the cheap
+  ones too: a commit's pre-commit hook can wait. A timing's own command (perf-bounds' test,
+  cdo-speed's builds; its process and start time) passes. Every step checks for itself: no
+  run admits its steps, so a step launched beside a timing checks like a new run. A run
+  waits quietly for each foreground step and for `ci-steps all`'s background build
+  (`build_step`, `cdo-slot quiet on|off`), so a timing that begins during the run waits
+  only for the steps that run (each counts by itself); after each step the run is admitted
+  afresh, so it pauses there instead of the two waiting on each other. Quiet is safe only
+  around children that check for themselves, and a run that cannot go quiet does not run
+  the step (exit 1). A refused run of `ci-steps all` ends its background build too. Every
+  timed start is checked and published under one gate (`timing-gate.lock`), and **one timing
+  runs per slot at a time** (replacing TLS-89's shared timings). A timing is live exactly while
+  its id lock is held, whatever `timed.lock` says (a worker that kept only the id lock's
+  descriptor keeps it live for `probe`, the guard and every new hold). A process **holds** it
+  when one of its descriptors carries that flock (read from `/proc/<pid>/fdinfo`, each
+  descriptor on its own, matched on the device and inode the kernel printed for the taker's
+  own lock, since `stat`'s device differs on btrfs; a descriptor that cannot be read makes a
+  "no" unknown): the process
+  that took it and everything that inherited the descriptor or a dup of it (a `run`'s
+  command, a worker it left behind, even after the `run` is killed); an independent open of
+  the file holds nothing. The one exception is the exact process (PID and start time) an
+  `acquire --bind PID --timed` binds it to. A build entry may start when it or an ancestor
+  holds the running timing; a timed start may reuse one only when it holds it itself, and
+  only once that timing is **final**: a timing is provisional from its publication until its
+  acquire finished the drain and both keepers' go and wrote its one commit mark, which the
+  hold's and the timing's keepers both wait for (an acquire that dies before it, or cannot
+  write it, leaves nothing held or timed; one whose hold, timing or bound process ended right
+  before it is refused, exit 6). A new timing is refused at once (exit 6) while an
+  unrelated timing runs. A request that holds a final timing (a retry, a timed start nested in
+  a timed `run`, as in `cdo-slot run ... --timed -- ci-steps perf-bounds`) is told "already
+  timed ... a duplicate request" (exit 4); one that holds a provisional timing is refused at
+  once ("still starting", exit 6), and one whose ancestor holds it is refused at once too
+  (related, but not reusable). These answers come before the request queues and again at
+  every poll while it waits, so nothing waits for a hold that ends only with itself. A
+  process whose descriptors cannot be read is skipped only when its user differs from ours or
+  it started before the timing's taker; any other makes the check refuse (exit 5). The bound
+  process's state and start time are read once at `--bind` and checked again under the gate
+  and on every round of the drain. A refused timing's record stays while its lock is still
+  held. A new timing's owner is judged from the process it will be bound
+  to, not from its launcher. The acquire publishes its timing itself, under the gate, and
+  the keeper only inherits it, so an acquire killed before its keeper started leaves no
+  timing to appear later. A keeper ends its timing within 0.2 s of its process, and a timing
+  whose bound process ended is skipped once its lock is seen released (within 3 s), so
+  `ci-steps all` does not wait a poll after its perf-bounds step. Two timings side by side
+  waited on each other until a deadline, in four shapes the reviews found (two perf-bounds, a
+  waiter keeping a lock a nested perf-bounds needed, a plain `run --timed` racing a
+  perf-bounds, two plain timed runs whose gates each parked behind the other's timing), and
+  each measured the other's load anyway. The gate covers one check and one publication;
+  inside it run only lock probes, the wait for a releasing keeper, the timing lock's instant
+  wait and a host-suspended read, never a wait for a build. A refused
+  `ci-steps perf-bounds` exits at once. Where the slot can be held,
+  a check that fails (the record cannot be written) refuses the run; on GitHub CI and hosts
+  without `flock` nothing is checked.
+- **The race between that check and a timed acquire is closed.** Each entry point records
+  itself (`$CDO_SLOT_DIR/entries/<pid>.<start time>`) before it decides; a timed acquire
+  counts every recorded entry that is still alive, outside its own line, as a build. A
+  decision that saw no timing came before the timing lock was taken, so its record existed
+  before the timer's first scan, and the entry lives for its whole run. Only the entry
+  process counts, never what it started: a leaked child of a finished run holds no timing up
+  (a live cargo or rustc is still a build by name). A record's name carries its start time,
+  so removing a dead record never removes a newer one of a reused PID, and only exact
+  `<pid>.<start>` names are judged: a record being written (its temporary file) is never
+  removed by a scan (other files go after 5 minutes). Not a shared flock
+  taken exclusive: the timer's own ancestors (ci-steps `all` above `perf-bounds`) are
+  entries too.
+- An entry point waiting for a timing is parked (`$CDO_SLOT_DIR/parked/`; tickets of dead
+  waiters are removed), so a timing does not count its script as a build. A lane's
+  `ci-steps perf-bounds` queued for the slot behind a landing is quiet while it waits (and a
+  `ci-steps all` above it is quiet while that step runs), so the landing's timing does not
+  wait for it: counting it made the two wait on each other (TLS-108's deadlock, by the
+  record; review r1). Quiet is a state the entry enters, never read from the process tree
+  (review r2): an entry whose waiter runs in the background stays a build.
+- Still open: a bare `cargo` started by a command queued before a timing is not checked; that
+  is TLS-98's cargo wrapper.
+
 ### Fixed (ENG-178: table procedures named like record built-ins: four follow-ups from ENG-173)
 
 From Fable's second review of ENG-173 (`/work/.al-sem/engine-notes/eng173/fable-eng173-r2.md`).
@@ -4299,7 +4386,8 @@ CDO has no site of these shapes, so no CDO answer moves.
     for; a stand-in build script refuses it too, run as `bash -o pipefail <script>`;
   - an untimed run does not wait;
   - a timing ends with its bound process; a second timing in a shared hold waits for a
-    build and stays on when the first ends; a refused `acquire --bind --timed` with no
+    build and stays on when the first ends (replaced by TLS-135: a second timing is refused
+    at once while one runs); a refused `acquire --bind --timed` with no
     session or token frees the slot; a timing whose hold is released while it waits refuses,
     and no other session takes the slot meanwhile; a reason with a CR is refused;
   - the lock design (`cdo_slot_decides_from_locks_alone`,

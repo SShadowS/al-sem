@@ -862,10 +862,7 @@ fn before_after_measures_nothing_beside_a_build() {
     );
     drop(build);
     assert_eq!(code, Some(1), "{text}");
-    assert!(
-        text.contains("builds still ran when the timed hold began"),
-        "{text}"
-    );
+    assert!(text.contains("the timed hold was refused"), "{text}");
     assert!(!t.log().contains("fingerprint"), "{}", t.log());
     let status = crate::clean_env::command("bash")
         .arg(t.path("repo/scripts/cdo-slot"))

@@ -1934,6 +1934,12 @@ fn ci_steps_all_runs_and_judges_the_agentflow_suite() {
         repo.join("scripts/ci-steps"),
     )
     .unwrap();
+    // TLS-135: ci-steps sources it (with no slot here it checks nothing).
+    std::fs::copy(
+        concat!(env!("CARGO_MANIFEST_DIR"), "/scripts/build-entry"),
+        repo.join("scripts/build-entry"),
+    )
+    .unwrap();
     // ENG-110: `build` runs check-ir-image on the binary; the stub build makes none.
     for s in [
         "tree-stamp",
