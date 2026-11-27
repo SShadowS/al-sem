@@ -11,7 +11,9 @@ fn private_slot<'a>(
     cmd: &'a mut std::process::Command,
     dir: &std::path::Path,
 ) -> &'a mut std::process::Command {
-    cmd.env("CDO_SLOT_DIR", dir.join("slot"))
+    // TLS-135: its own process group, ended with the test (cdo_slot::owned).
+    crate::cdo_slot::owned(cmd)
+        .env("CDO_SLOT_DIR", dir.join("slot"))
         .env("CDO_SLOT_MEM_MIN_GB", "0")
         .env("CDO_SLOT_POLL_S", "1")
         .env("CDO_SLOT_BUILD_NAMES", "tls89-none")
@@ -93,7 +95,7 @@ fn speed_gate_times_nothing_beside_a_build() {
     // One process: the builtin `read` waits on a pipe nobody writes, so killing
     // it leaves no `sleep` child holding the test's output (a nextest leak).
     let build = crate::cdo_slot::Reap(
-        crate::clean_env::command(&fake)
+        crate::cdo_slot::owned(&mut crate::clean_env::command(&fake))
             .args(["-c", "read -t 600 _ || true"])
             .stdin(std::process::Stdio::piped())
             .stdout(std::process::Stdio::null())
@@ -102,8 +104,7 @@ fn speed_gate_times_nothing_beside_a_build() {
             .unwrap(),
     );
     let holder = crate::cdo_slot::Reap(
-        std::process::Command::new("sleep")
-            .arg("600")
+        crate::cdo_slot::owned(std::process::Command::new("sleep").arg("600"))
             .spawn()
             .unwrap(),
     );
@@ -5610,8 +5611,7 @@ fn host_suspend_reading_and_slot_status() {
 
     let slot = concat!(env!("CARGO_MANIFEST_DIR"), "/scripts/cdo-slot");
     let holder = crate::cdo_slot::Reap(
-        std::process::Command::new("sleep")
-            .arg("600")
+        crate::cdo_slot::owned(std::process::Command::new("sleep").arg("600"))
             .spawn()
             .unwrap(),
     );
@@ -6118,7 +6118,7 @@ fn perf_bounds_times_nothing_beside_a_build() {
     let fake = dir.path().join(&fake_name);
     std::os::unix::fs::symlink("/bin/bash", &fake).unwrap();
     let build = crate::cdo_slot::Reap(
-        crate::clean_env::command(&fake)
+        crate::cdo_slot::owned(&mut crate::clean_env::command(&fake))
             .args(["-c", "read -t 600 _ || true"])
             .stdin(std::process::Stdio::piped())
             .stdout(std::process::Stdio::null())
@@ -6177,8 +6177,7 @@ fn perf_bounds_holds_no_slot_on_a_ci_runner() {
 fn perf_bounds_shares_the_hold_it_runs_in() {
     let dir = tempfile::tempdir().unwrap();
     let holder = crate::cdo_slot::Reap(
-        std::process::Command::new("sleep")
-            .arg("600")
+        crate::cdo_slot::owned(std::process::Command::new("sleep").arg("600"))
             .spawn()
             .unwrap(),
     );
@@ -6222,8 +6221,7 @@ fn perf_bounds_does_not_wait_for_a_parked_gate() {
     let dir = tempfile::tempdir().unwrap();
     let slot = concat!(env!("CARGO_MANIFEST_DIR"), "/scripts/cdo-slot");
     let holder = crate::cdo_slot::Reap(
-        std::process::Command::new("sleep")
-            .arg("600")
+        crate::cdo_slot::owned(std::process::Command::new("sleep").arg("600"))
             .spawn()
             .unwrap(),
     );
@@ -6372,8 +6370,7 @@ fn perf_bounds_parked_skip_hides_no_real_build() {
     let dir = tempfile::tempdir().unwrap();
     let slot = concat!(env!("CARGO_MANIFEST_DIR"), "/scripts/cdo-slot");
     let holder = crate::cdo_slot::Reap(
-        std::process::Command::new("sleep")
-            .arg("600")
+        crate::cdo_slot::owned(std::process::Command::new("sleep").arg("600"))
             .spawn()
             .unwrap(),
     );
@@ -6391,7 +6388,7 @@ fn perf_bounds_parked_skip_hides_no_real_build() {
     let script = dir.path().join(&script_name);
     std::fs::write(&script, "read -t 600 _ || true\n").unwrap();
     let live = crate::cdo_slot::Reap(
-        crate::clean_env::command("bash")
+        crate::cdo_slot::owned(&mut crate::clean_env::command("bash"))
             .arg(&script)
             .stdin(std::process::Stdio::piped())
             .spawn()

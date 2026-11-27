@@ -31,9 +31,71 @@ const WATCHDOG: std::time::Duration = std::time::Duration::from_secs(600);
 /// (a landing runs the suite inside its own hold: its token, its tuning, its
 /// session), so a slot test gives the same result inside a hold and outside.
 /// TLS-115: `crate::clean_env`, so a `BASH_ENV` or gate knob is gone too.
+///
+/// ⟨TLS-135⟩ It also makes the process [`owned`].
 fn scrubbed(mut cmd: std::process::Command) -> std::process::Command {
     crate::clean_env::clean_env(&mut cmd);
+    owned(&mut cmd);
     cmd
+}
+
+/// ⟨TLS-135⟩ The environment variable that marks every process a test of this
+/// process started (and all they start: it is inherited), with this process's
+/// PID and start time as its value.
+const OWNER_VAR: &str = "ALSEM_SLOT_TEST_OWNER";
+
+/// "<pid>.<start time>" of this test process.
+fn owner_mark() -> &'static str {
+    static MARK: std::sync::OnceLock<String> = std::sync::OnceLock::new();
+    MARK.get_or_init(|| {
+        let me = std::process::id();
+        let stat = std::fs::read_to_string(format!("/proc/{me}/stat")).unwrap();
+        let start = stat
+            .rsplit_once(") ")
+            .unwrap()
+            .1
+            .split(' ')
+            .nth(19)
+            .unwrap()
+            .to_string();
+        format!("{me}.{start}")
+    })
+}
+
+/// ⟨TLS-135⟩ `cmd` will lead a process group of its own (so [`Reap`] ends its
+/// whole tree) and carries this test process's [`OWNER_VAR`] mark. The first
+/// call starts this process's sentinel: a shell that waits until this test
+/// process is gone (killed outright, as by a stopped landing: no `Drop` runs)
+/// and then kills every process still carrying the mark. On 2026-11-27 killed
+/// test runs left stub gates whose `cargo` waited on a file for ever, and every
+/// real timed acquire waited for that "build".
+pub(crate) fn owned(cmd: &mut std::process::Command) -> &mut std::process::Command {
+    use std::os::unix::process::CommandExt;
+    static SENTINEL: std::sync::Once = std::sync::Once::new();
+    let mark = owner_mark();
+    SENTINEL.call_once(|| {
+        let (pid, start) = mark.split_once('.').unwrap();
+        let script = format!(
+            "alive() {{ local f; read -r -a f < <(sed 's/.*) //' /proc/{pid}/stat 2>/dev/null); \
+             [[ \"${{f[19]:-}}\" == {start} && \"${{f[0]:-Z}}\" != Z ]]; }}; \
+             while alive; do sleep 1; done; \
+             for _ in 1 2 3; do \
+               for e in $(grep -lzxF '{OWNER_VAR}={mark}' /proc/[0-9]*/environ 2>/dev/null); do \
+                 p=${{e#/proc/}}; kill -KILL \"${{p%/environ}}\" 2>/dev/null; \
+               done; sleep 0.2; \
+             done"
+        );
+        // A clean environment (TLS-115: no caller's BASH_ENV runs in it).
+        let _ = crate::clean_env::command("bash")
+            .args(["-c", &script])
+            .env_remove(OWNER_VAR)
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .process_group(0)
+            .spawn();
+    });
+    cmd.process_group(0).env(OWNER_VAR, mark)
 }
 
 /// SIGKILL to every process whose environment names `dir` as CDO_SLOT_DIR.
@@ -260,6 +322,19 @@ impl Drop for Slot {
 /// (TLS-102: three slot tests failed only inside landings).
 const POLL_BUDGET: std::time::Duration = std::time::Duration::from_secs(60);
 
+/// ⟨TLS-135⟩ A shell loop that waits until `path` (a shell word, quoted here)
+/// exists, polling every 0.05 s, and gives up after 300 s with exit 99: no
+/// stub or `bash -c` of these tests waits on a file for ever (a killed test
+/// left such loops running for hours, one of them a stub `cargo` that every
+/// real timed acquire waited for). No single quote in it: it fits inside a
+/// single-quoted `bash -c`.
+fn wait_for(path: &str) -> String {
+    format!(
+        "n=0; until [ -e \"{path}\" ]; do sleep 0.05; n=$((n + 1)); \
+         [ $n -lt 6000 ] || exit 99; done"
+    )
+}
+
 /// Polls `ok` every 50 ms; panics naming `what` after POLL_BUDGET.
 fn until(what: &str, ok: &dyn Fn() -> bool) {
     let start = std::time::Instant::now();
@@ -309,8 +384,7 @@ fn guard_many(s: &Slot, who: &str, cmds: &[&str]) -> Vec<(Option<i32>, String)> 
 /// A process that sleeps 600 s: a stand-in for a bound process.
 fn sleeper() -> Reap {
     Reap(
-        std::process::Command::new("sleep")
-            .arg("600")
+        owned(std::process::Command::new("sleep").arg("600"))
             .spawn()
             .unwrap(),
     )
@@ -334,9 +408,12 @@ fn stand_in(s: &Slot, program: impl AsRef<std::ffi::OsStr>, args: &[&std::ffi::O
 }
 
 /// ⟨TLS-90⟩ A spawned process (a waiter, a stand-in) that is killed and reaped
-/// when it drops, so a failing assertion cannot leak it. (A test process killed
-/// outright runs no `Drop`, so that case can still leak; the slot's watchdog
-/// covers it.)
+/// when it drops, so a failing assertion cannot leak it. ⟨TLS-135⟩ With its
+/// process group: a process started through [`scrubbed`] (or with
+/// `process_group(0)`) leads a group of its own, and the drop kills that whole
+/// group first, so nothing it started (a stub cargo waiting on a file, a
+/// `bash -c` loop) outlives the test. A test process killed outright runs no
+/// `Drop`: the slot's sentinel covers that case ([`Slot::new`]).
 pub(crate) struct Reap(pub(crate) std::process::Child);
 
 /// ⟨TLS-90⟩ The one way the slot tests spawn a waiter: `acquire <owner> <reason>
@@ -365,6 +442,25 @@ impl std::ops::DerefMut for Reap {
 
 impl Drop for Reap {
     fn drop(&mut self) {
+        // Its group first (when it leads one), but only while the child is not
+        // reaped (alive or a zombie): until then no other process can have its
+        // pid, so no other group its number. `WNOWAIT` looks without reaping.
+        let pid = self.0.id();
+        // SAFETY: a zeroed siginfo for waitid to fill.
+        let mut info: libc::siginfo_t = unsafe { std::mem::zeroed() };
+        // SAFETY: waitid on this test's own child, reaping nothing.
+        let unreaped = unsafe {
+            libc::waitid(
+                libc::P_PID,
+                pid,
+                &mut info,
+                libc::WEXITED | libc::WNOHANG | libc::WNOWAIT,
+            )
+        } == 0;
+        if unreaped {
+            // SAFETY: SIGKILL to this test's own child's process group.
+            unsafe { libc::kill(-(pid as i32), libc::SIGKILL) };
+        }
         let _ = self.0.kill();
         let _ = self.0.wait();
     }
@@ -393,6 +489,110 @@ fn reap_ends_a_waiter_when_the_test_panics() {
         !std::path::Path::new(&format!("/proc/{pid}")).exists(),
         "the waiter {pid} outlived the panic"
     );
+}
+
+/// The PIDs of live processes whose environment carries `mark` as
+/// [`OWNER_VAR`].
+fn marked(mark: &str) -> Vec<u32> {
+    let want = format!("{OWNER_VAR}={mark}");
+    std::fs::read_dir("/proc")
+        .unwrap()
+        .flatten()
+        .filter_map(|e| e.file_name().to_string_lossy().parse::<u32>().ok())
+        .filter(|p| {
+            std::fs::read(format!("/proc/{p}/environ"))
+                .unwrap_or_default()
+                .split(|b| *b == 0)
+                .any(|v| v == want.as_bytes())
+        })
+        .collect()
+}
+
+/// The child half of [`killed_test_leaves_no_process_behind`] (run only by
+/// it): a gate whose stub `cargo fmt` waits on a file that never comes, as the
+/// leaked gates of 2026-11-27 did. It writes its owner mark and slot folder to
+/// `TLS135_LEAK_OUT`, then `ready` once the stub waits, then waits to be killed.
+#[test]
+#[ignore = "run by killed_test_leaves_no_process_behind"]
+fn killed_test_child() {
+    let Ok(out) = std::env::var("TLS135_LEAK_OUT") else {
+        return;
+    };
+    let s = Slot::new();
+    let (gate, script) = gate_folder(&s);
+    let never = s.0.path().join("never");
+    let never_s = never.display().to_string();
+    let _g = Reap(
+        gate_cmd(
+            &s,
+            &gate,
+            &script,
+            &[],
+            &[("TLS135_HOLD", never_s.as_str())],
+        )
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .spawn()
+        .unwrap(),
+    );
+    until("the stub cargo waits", &|| {
+        s.0.path().join("fmt-running").exists()
+    });
+    std::fs::write(
+        &out,
+        format!("{}\n{}\nready\n", owner_mark(), s.0.path().display()),
+    )
+    .unwrap();
+    std::thread::sleep(std::time::Duration::from_secs(600));
+}
+
+/// ⟨TLS-135⟩ A test process killed outright (SIGKILL: no `Drop` runs, as when
+/// a landing or a person stops a test run) leaves no process of its tree:
+/// its sentinel ([`owned`]) kills every process that carries its mark. The
+/// child test starts a gate whose stub `cargo` waits on a file that never
+/// comes; once it waits, the child is killed, and nothing marked by it may
+/// remain.
+///
+/// Mutation (2026-11-27): the sentinel's kill loop dropped (it exits once the
+/// test process is gone) -> the gate and its stub cargo survive (red);
+/// restored, green.
+#[test]
+fn killed_test_leaves_no_process_behind() {
+    let dir = tempfile::tempdir().unwrap();
+    let out = dir.path().join("child");
+    let mut child = Reap(
+        scrubbed(std::process::Command::new(std::env::current_exe().unwrap()))
+            .args([
+                "cdo_slot::killed_test_child",
+                "--exact",
+                "--ignored",
+                "--test-threads=1",
+            ])
+            .env("TLS135_LEAK_OUT", &out)
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .spawn()
+            .unwrap(),
+    );
+    until("the child test's gate waits", &|| {
+        std::fs::read_to_string(&out).is_ok_and(|t| t.ends_with("ready\n"))
+    });
+    let text = std::fs::read_to_string(&out).unwrap();
+    let mut lines = text.lines();
+    let mark = lines.next().unwrap().to_string();
+    let slot_tmp = std::path::PathBuf::from(lines.next().unwrap());
+    assert!(
+        marked(&mark).len() >= 2,
+        "precondition: the child's gate and its stub run: {:?}",
+        marked(&mark)
+    );
+    // SIGKILL: no Drop in the child runs.
+    child.0.kill().unwrap();
+    child.0.wait().unwrap();
+    until("nothing of the killed test is left", &|| {
+        marked(&mark).is_empty()
+    });
+    let _ = std::fs::remove_dir_all(slot_tmp);
 }
 
 /// One holder at a time. A takes the slot; A again is "already yours" (exit 4);
@@ -3537,10 +3737,11 @@ fn gate_folder(s: &Slot) -> (std::path::PathBuf, String) {
     std::fs::write(
         &cargo,
         format!(
-            "#!/bin/bash\n[ \"$2\" = --version ] && exit 0\n\
-             if [ -n \"$TLS135_HOLD\" ] && [ \"$1\" = \"${{TLS135_HOLD_CMD:-fmt}}\" ]; then touch {t}/$1-running; while [ ! -e \"$TLS135_HOLD\" ]; do sleep 0.05; done; fi\n\
+            "#!/bin/bash\nprintf t135-cargo >/proc/$$/comm 2>/dev/null\n[ \"$2\" = --version ] && exit 0\n\
+             if [ -n \"$TLS135_HOLD\" ] && [ \"$1\" = \"${{TLS135_HOLD_CMD:-fmt}}\" ]; then touch {t}/$1-running; {wait}; fi\n\
              if [ -e {t}/on ] && [ ! -e {t}/off ]; then echo beside; else echo after; fi >>{t}/cargo-log\n\
-             [ -z \"$TLS135_LEAK\" ] || (sleep 600 </dev/null >/dev/null 2>&1 &)\n"
+             [ -z \"$TLS135_LEAK\" ] || (sleep 600 </dev/null >/dev/null 2>&1 &)\n",
+            wait = wait_for("$TLS135_HOLD")
         ),
     )
     .unwrap();
@@ -3612,7 +3813,10 @@ fn gate_cmd(
 /// waits until `<tmp>/end` exists, then touches `<tmp>/off`.
 fn test_timing(s: &Slot, env: &[(&str, &str)]) -> Reap {
     let t = s.0.path().display().to_string();
-    let body = format!("touch {t}/on; while [ ! -e {t}/end ]; do sleep 0.05; done; touch {t}/off");
+    let body = format!(
+        "touch {t}/on; {w}; touch {t}/off",
+        w = wait_for(&format!("{t}/end"))
+    );
     s.bg(
         "A",
         &[
@@ -3647,7 +3851,7 @@ fn cdo_slot_a_gate_queued_before_a_timing_waits_for_it() {
 
     // The earlier gate holds the lock; ours queues behind it.
     let release = t.join("release");
-    let body = format!("while [ ! -e {} ]; do sleep 0.05; done", release.display());
+    let body = wait_for(&release.display().to_string());
     let _earlier = stand_in(
         &s,
         "flock",
@@ -4216,9 +4420,11 @@ fn cdo_slot_a_timers_own_ancestor_admits_no_step_beside_it() {
     let td = t.display().to_string();
     let body = format!(
         "{RECORD_SELF} \
-         bash '{SLOT}' run lane timing --timed -- bash -c 'touch {td}/on; while [ ! -e {td}/end ]; do sleep 0.05; done; touch {td}/off' & \
-         until [ -e {td}/on ]; do sleep 0.05; done; \
-         bash '{gate_script}' fmt; echo $? >{td}/gate-rc; touch {td}/end; wait"
+         bash '{SLOT}' run lane timing --timed -- bash -c 'touch {td}/on; {w_end}; touch {td}/off' & \
+         {w_on}; \
+         bash '{gate_script}' fmt; echo $? >{td}/gate-rc; touch {td}/end; wait",
+        w_end = wait_for(&format!("{td}/end")),
+        w_on = wait_for(&format!("{td}/on"))
     );
     let out = gate_cmd(&s, &gate, &script, &[], &[("CDO_SLOT_ENTRY_WAIT_S", "1")]);
     let mut c = scrubbed(std::process::Command::new("bash"));
@@ -4241,8 +4447,9 @@ fn cdo_slot_a_timers_own_ancestor_admits_no_step_beside_it() {
     // A quiet entry the timing skipped launches a gate after the timing began.
     let body = format!(
         "{RECORD_SELF} bash '{SLOT}' quiet on || exit 9; touch {td}/quiet; \
-         until [ -e {td}/on ]; do sleep 0.05; done; \
-         bash '{gate_script}' fmt; echo $? >{td}/gate-rc2"
+         {w_on}; \
+         bash '{gate_script}' fmt; echo $? >{td}/gate-rc2",
+        w_on = wait_for(&format!("{td}/on"))
     );
     let env = gate_cmd(&s, &gate, &script, &[], &[("CDO_SLOT_ENTRY_WAIT_S", "1")]);
     let mut c = scrubbed(std::process::Command::new("bash"));
@@ -4629,7 +4836,7 @@ fn cdo_slot_gate_entry_deadline_holds_over_repeated_handovers() {
     // ENTER (start timing i), RETRY (end it).
     let start_timing = |i: usize| {
         let tn = t.display().to_string();
-        let body = format!("while [ ! -e {tn}/end{i} ]; do sleep 0.05; done");
+        let body = wait_for(&format!("{tn}/end{i}"));
         let r = s.bg(
             "A",
             &[
@@ -4900,8 +5107,9 @@ fn cdo_slot_a_run_is_admitted_afresh_after_a_quiet_step() {
     let entry_lib = concat!(env!("CARGO_MANIFEST_DIR"), "/scripts/build-entry");
     let body = format!(
         "source '{entry_lib}'; build_entry run || exit 9; \
-         build_step bash -c 'touch {td}/stepping; until [ -e {td}/go ]; do sleep 0.05; done'; \
-         cargo fmt; echo done >{td}/worked-on"
+         build_step bash -c 'touch {td}/stepping; {w_go}'; \
+         cargo fmt; echo done >{td}/worked-on",
+        w_go = wait_for(&format!("{td}/go"))
     );
     let mut run = Reap(
         gate_shell(&s, &gate, &script, &body, &[("CDO_SLOT_ENTRY_WAIT_S", "1")])
@@ -5255,7 +5463,8 @@ fn cdo_slot_a_foreign_entry_timing_keeps_no_turn_from_a_nested_one() {
     // The outer timed run; its command waits for `go`, then runs N.
     let gate_script = gate.join(&script).display().to_string();
     let body = format!(
-        "touch {td}/outer-on; until [ -e {td}/go ]; do sleep 0.05; done; bash '{gate_script}' perf-bounds"
+        "touch {td}/outer-on; {w_go}; bash '{gate_script}' perf-bounds",
+        w_go = wait_for(&format!("{td}/go"))
     );
     let path = format!(
         "{}:{}",
@@ -5513,18 +5722,18 @@ fn cdo_slot_the_timing_gate_is_not_held_across_a_drain() {
     let build = stand_in(&s, &fake, &["-c".as_ref(), "sleep 600; true".as_ref()]);
     let t1 = sleeper();
     let t1pid = t1.id().to_string();
-    // The first timing drains, waiting for the build.
-    let first = s.bg(
+    // The first timing drains, waiting for the build, for longer than this
+    // test runs (its drain never ends here).
+    let mut first = s.bg(
         "A",
         &["acquire", "lane", "first", "--bind", &t1pid, "--timed"],
-        &[names, ("CDO_SLOT_TIMED_WAIT_S", "30")],
+        &[names, ("CDO_SLOT_TIMED_WAIT_S", "600")],
     );
     until("the first timing is published", &|| {
         s.run("probe", &["status"], &[]).1.contains("(first)")
     });
     let t2 = sleeper();
     let t2pid = t2.id().to_string();
-    let asked = std::time::Instant::now();
     let (code, text) = s.run(
         "A",
         &["acquire", "lane", "second", "--bind", &t2pid, "--timed"],
@@ -5539,10 +5748,12 @@ fn cdo_slot_the_timing_gate_is_not_held_across_a_drain() {
         text.contains("refused: another timing runs in this slot"),
         "{text}"
     );
+    // The second was answered while the first still drains: an order, not a
+    // clock (TLS-135: "< 20 s" failed at 27 s under a landing's load). A gate
+    // held across the drain answers only after the gate wait (exit 5).
     assert!(
-        asked.elapsed() < std::time::Duration::from_secs(20),
-        "the gate was held across the first timing's drain: {:?}",
-        asked.elapsed()
+        first.0.try_wait().unwrap().is_none(),
+        "the first timing's drain ended before the second was answered"
     );
     drop(build);
     drop(first);
@@ -5583,8 +5794,9 @@ fn cdo_slot_two_sibling_timed_runs_never_wait_on_each_other() {
     // Each command: say it runs, wait for `go`, run its gate, keep its result.
     let sibling = |i: usize| {
         let body = format!(
-            "touch {td}/on{i}; until [ -e {td}/go ]; do sleep 0.05; done; \
-             bash '{gate_script}' fmt; echo $? >{td}/rc{i}"
+            "touch {td}/on{i}; {w_go}; \
+             bash '{gate_script}' fmt; echo $? >{td}/rc{i}",
+            w_go = wait_for(&format!("{td}/go"))
         );
         let log = t.join(format!("sib{i}.log"));
         Reap(
@@ -5661,8 +5873,9 @@ fn cdo_slot_a_timed_runs_command_outlives_its_killed_wrapper() {
     );
     let gate_script = gate.join(&script).display().to_string();
     let body = format!(
-        "touch {td}/on; until [ -e {td}/go ]; do sleep 0.05; done; \
-         bash '{gate_script}' fmt; echo $? >{td}/rc"
+        "touch {td}/on; {w_go}; \
+         bash '{gate_script}' fmt; echo $? >{td}/rc",
+        w_go = wait_for(&format!("{td}/go"))
     );
     let mut wrapper = s.bg(
         "A",
@@ -5875,9 +6088,10 @@ fn cdo_slot_an_orphan_worker_owns_its_timing() {
     );
     let gate_script = gate.join(&script).display().to_string();
     let worker = format!(
-        "( until [ -e {td}/go ]; do sleep 0.05; done; \
+        "( {w_go}; \
          bash '{gate_script}' fmt >{td}/fmt.log 2>&1; echo $? >{td}/rc ) \
-         </dev/null >/dev/null 2>&1 & exit 0"
+         </dev/null >/dev/null 2>&1 & exit 0",
+        w_go = wait_for(&format!("{td}/go"))
     );
     let (code, text) = s.run(
         "A",
@@ -6064,7 +6278,8 @@ fn cdo_slot_only_a_descriptor_with_the_lock_holds_a_timing() {
          for f in /proc/$$/fd/*; do [ \"$(readlink \"$f\")\" = \"$id\" ] && n=${{f##*/}}; done; \
          eval \"exec 9>&$n $n>&-\"; \
          bash '{gate_script}' fmt >{td}/dup.log 2>&1; echo $? >{td}/duprc; \
-         echo \"$id\" >{td}/id; until [ -e {td}/done ]; do sleep 0.05; done"
+         echo \"$id\" >{td}/id; {w_done}",
+        w_done = wait_for(&format!("{td}/done"))
     );
     let mut run = s.bg(
         "A",
@@ -6106,9 +6321,10 @@ fn cdo_slot_a_child_of_a_timings_process_cannot_reuse_it() {
     let t = s.0.path();
     let td = t.display().to_string();
     let parent = format!(
-        "until [ -e {td}/go ]; do sleep 0.05; done; \
+        "{w_go}; \
          bash -c 'exec bash \"$0\" acquire lane nested --wait --bind $$ --timed' '{SLOT}' \
-         >{td}/child.log 2>&1; echo $? >{td}/rc; sleep 600"
+         >{td}/child.log 2>&1; echo $? >{td}/rc; sleep 600",
+        w_go = wait_for(&format!("{td}/go"))
     );
     let env_of = s.cmd("B", &["status"], &[("CDO_SLOT_POLL_S", "1")]);
     let mut p = scrubbed(std::process::Command::new("bash"));
@@ -6433,7 +6649,8 @@ fn cdo_slot_an_unread_descriptor_keeps_a_match_and_makes_a_no_unknown() {
     let gate_script = gate.join(&script).display().to_string();
     let body = format!(
         "CDO_SLOT_TEST_FDINFO_UNREADABLE=0 bash '{gate_script}' fmt >{td}/own.log 2>&1; \
-         echo $? >{td}/ownrc; until [ -e {td}/done ]; do sleep 0.05; done"
+         echo $? >{td}/ownrc; {w_done}",
+        w_done = wait_for(&format!("{td}/done"))
     );
     let mut run = s.bg(
         "A",
