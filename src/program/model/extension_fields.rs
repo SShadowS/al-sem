@@ -174,17 +174,20 @@ pub fn merge_extension_fields(
             "{base_table_id}/key/ext/{}/{}/",
             object.app_guid, object.object_number
         );
-        let mut earlier: Vec<Vec<String>> = if alt > 0 {
+        // A key is the same key when its members AND the fields they resolve
+        // to agree (sol r8: two alternatives may declare a field of one name
+        // under different numbers).
+        let mut earlier: Vec<(Vec<String>, Vec<String>)> = if alt > 0 {
             base.keys
                 .iter()
                 .filter(|b| b.id.starts_with(&own_prefix))
-                .map(|b| b.members.clone())
+                .map(|b| (b.members.clone(), b.fields.clone()))
                 .collect()
         } else {
             Vec::new()
         };
         for (index, k) in ext_keys.iter().enumerate() {
-            let fields = k
+            let fields: Vec<String> = k
                 .members
                 .iter()
                 .filter_map(|name| {
@@ -221,7 +224,10 @@ pub fn merge_extension_fields(
             // declaring two keys over fields an earlier one keyed once keeps
             // the second. Skipped repeats are never added, so the keys under
             // the prefix hold the most any one alternative declared.
-            if let Some(p) = earlier.iter().position(|m| *m == k.members) {
+            if let Some(p) = earlier
+                .iter()
+                .position(|(m, f)| *m == k.members && *f == fields)
+            {
                 earlier.swap_remove(p);
                 continue;
             }

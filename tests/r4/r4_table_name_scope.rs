@@ -159,10 +159,12 @@ tableextension 50231 "Keyed Ext" extends "Keyed"
     fields
     {
         field(50231; "KA"; Integer) { }
+        field(50233; "KX"; Integer) { }
     }
     keys
     {
         key(KeyA; "KA") { }
+        key(KeyX; "KX") { }
     }
 }
 #else
@@ -172,6 +174,7 @@ tableextension 50231 "Keyed Ext B" extends "Keyed"
     {
         field(50231; "KA"; Integer) { }
         field(50232; "KB"; Integer) { }
+        field(50234; "KX"; Integer) { }
     }
     keys
     {
@@ -179,6 +182,7 @@ tableextension 50231 "Keyed Ext B" extends "Keyed"
         key(KeyB; "KB") { }
         key(KeyC; "KB") { SumIndexFields = "KA"; }
         key(KeyD; "KA") { SumIndexFields = "KB"; }
+        key(KeyX; "KX") { }
     }
 }
 #endif
@@ -464,7 +468,8 @@ fn var_table(ws: &ModelEntities, app: &str, routine: &str, var: &str) -> Option<
 /// repeat check against the keys this alternative is adding (not only
 /// earlier ones) drops KeyC and fails "... once each"; a repeat check that
 /// does not count (one earlier `KA` key skipping both later ones) drops KeyD
-/// and fails "... once each".
+/// and fails "... once each"; a repeat matched on members alone (not the
+/// fields they resolve to) drops the 50234 `KeyX` and fails "... once each".
 #[test]
 fn a_table_name_binds_as_the_resolver_binds_it_in_the_model() {
     let ws = model();
@@ -611,20 +616,38 @@ fn a_table_name_binds_as_the_resolver_binds_it_in_the_model() {
         .rfind(|t| t.id == format!("{WS}/table/50230") && !t.is_extension_stub)
         .expect("Keyed");
     let own = format!("{WS}/table/50230/key/ext/{WS}/50231/");
-    let ext_keys: Vec<&Vec<String>> = keyed
+    // Each key as (members, resolved field numbers), sorted.
+    let mut ext_keys: Vec<(String, String)> = keyed
         .keys
         .iter()
         .filter(|k| k.id.starts_with(&own))
-        .map(|k| &k.members)
+        .map(|k| {
+            let numbers: Vec<&str> = k
+                .fields
+                .iter()
+                .map(|f| f.rsplit('/').next().unwrap_or(""))
+                .collect();
+            (k.members.join(","), numbers.join(","))
+        })
         .collect();
-    // sol r6: and the later alternative's own two keys over `KB` (KeyB,
-    // KeyC) are both kept: keys of one alternative never match each other;
-    // sol r7: its two keys over `KA` (KeyA, KeyD) against the first
-    // alternative's one: one repeat, one kept. KA, KA, KB, KB.
+    ext_keys.sort();
+    // sol r6: the later alternative's own two keys over `KB` (KeyB, KeyC) are
+    // both kept: keys of one alternative never match each other; sol r7: its
+    // two keys over `KA` (KeyA, KeyD) against the first alternative's one:
+    // one repeat, one kept; sol r8: `KX` is field 50233 in one alternative
+    // and 50234 in the other, so the two `KeyX` are different keys.
+    let pair = |m: &str, n: &str| (m.to_string(), n.to_string());
     assert_eq!(
-        ext_keys.len(),
-        4,
-        "both alternatives' keys, once each: {ext_keys:?}"
+        ext_keys,
+        vec![
+            pair("ka", "50231"),
+            pair("ka", "50231"),
+            pair("kb", "50232"),
+            pair("kb", "50232"),
+            pair("kx", "50233"),
+            pair("kx", "50234"),
+        ],
+        "both alternatives' keys, once each"
     );
     // sol + Fable r5: another app's same-named extension with an identical
     // key on the same base keeps its key.
