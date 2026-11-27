@@ -1459,14 +1459,15 @@ fn alsem_out(words: &[&str], rest: &[&str]) -> String {
 
 /// ENG-217: the readers that render or fingerprint a key keep an unresolved
 /// member ("Odd Key"'s `key(PK; "No.", "Missing")`): table mode's `keys:`
-/// line names it marked, field mode's key list names it marked, and the
+/// line names it marked, field mode's json lists it under `unresolved`
+/// (its `fields` hold names only), and the
 /// snapshot's key shape carries it as `unresolved:missing`, so the key is
 /// never the shorter key's shape (its `#K0` differs from its `#K1`, `"No."`
 /// alone). And a tableextension stub sharing a table's id is no key of it
 /// (Fable r1 S1).
 /// DISCRIMINATION (2026-11-27, each break made with Edit, run red, restored,
 /// green): leaving the member out of `table_keys_line` fails "keys line";
-/// field mode's `key_names` without the mark fails "field mode"; the
+/// field mode's json without its `unresolved` list fails "field mode"; the
 /// snapshot shape without the member fails "snapshot shape"; table mode's key
 /// fields taking the colliding stub's keys fails "a colliding stub's key".
 /// (The snapshot holds one row per table, the stub too, so a stub that shares
@@ -1490,8 +1491,28 @@ fn key_readers_name_an_unresolved_member() {
         &["query", "touches"],
         &["--table", "Odd Key", "--field", "No.", "--format", "json"],
     );
-    assert!(
-        field.contains("missing (not resolved)"),
+    // sol r2: `fields` holds names only; the unresolved member is listed apart.
+    let fv: serde_json::Value = serde_json::from_str(&field).expect("field json");
+    let mut keys = Vec::new();
+    let mut stack = vec![&fv];
+    while let Some(x) = stack.pop() {
+        match x {
+            serde_json::Value::Object(m) => {
+                if m.contains_key("unresolved") && m.contains_key("fields") {
+                    keys.push((m["fields"].clone(), m["unresolved"].clone()));
+                }
+                stack.extend(m.values());
+            }
+            serde_json::Value::Array(a) => stack.extend(a.iter()),
+            _ => {}
+        }
+    }
+    assert_eq!(
+        keys,
+        vec![(
+            serde_json::json!(["No.", "missing"]),
+            serde_json::json!(["missing"])
+        )],
         "field mode: {field}"
     );
     // The snapshot's key shape is hashed: "Odd Key"'s `#K0` ("No.", and the

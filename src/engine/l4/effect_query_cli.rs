@@ -6885,14 +6885,16 @@ fn render_field_touches(
         .collect();
     let field_name_of = |id: &str| table.field_name(id).unwrap_or(id).to_string();
     // ENG-217: a key's members by name, one that did not resolve by its
-    // declared name (never left out).
-    let key_names = |k: &crate::program::model::workspace::ModelKey| -> Vec<String> {
+    // declared name (never left out); the human text marks it (`marked`), the
+    // json lists it apart (sol r2: `fields` holds names only).
+    let key_names = |k: &crate::program::model::workspace::ModelKey, marked: bool| -> Vec<String> {
         k.fields
             .iter()
             .zip(&k.members)
-            .map(|(f, m)| {
-                f.as_deref()
-                    .map_or_else(|| format!("{m} (not resolved)"), field_name_of)
+            .map(|(f, m)| match f.as_deref() {
+                Some(f) => field_name_of(f),
+                None if marked => format!("\"{}\" (not resolved)", m.replace('"', "\"\"")),
+                None => m.clone(),
             })
             .collect()
     };
@@ -6901,10 +6903,21 @@ fn render_field_touches(
         .iter()
         .map(|&i| {
             let k = &table.keys[i];
-            let mut v = json!({"id": k.id, "fields": key_names(k)});
+            let mut v = json!({"id": k.id, "fields": key_names(k, false)});
             // r3 L1 (additive): the table extension that adds the key.
             if let Some(ext) = &k.declared_by {
                 v["declaredBy"] = json!(ext);
+            }
+            // ENG-217 (additive): the members that did not resolve.
+            let unresolved: Vec<&String> = k
+                .fields
+                .iter()
+                .zip(&k.members)
+                .filter(|(f, _)| f.is_none())
+                .map(|(_, m)| m)
+                .collect();
+            if !unresolved.is_empty() {
+                v["unresolved"] = json!(unresolved);
             }
             v
         })
@@ -7128,7 +7141,7 @@ fn render_field_touches(
             .iter()
             .map(|&i| {
                 let k = &table.keys[i];
-                let names: Vec<String> = key_names(k);
+                let names: Vec<String> = key_names(k, true);
                 // r3 L1: a key a table extension adds is named by it.
                 match &k.declared_by {
                     Some(ext) => format!(

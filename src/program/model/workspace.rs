@@ -243,7 +243,10 @@ pub struct ModelKey {
     /// fixed number ([`SYSTEM_FIELDS`]). `None` for a member that names no field
     /// the table (or its own alternative) declares: the member is KEPT, never
     /// left out, so a key with one cannot be read as a shorter key (ENG-217).
-    /// Read the whole key through [`Self::resolved`].
+    /// Read the whole key through [`Self::resolved`]. On a tableextension
+    /// stub, a member naming a field of the extended table holds THAT table's
+    /// field id (`merge_extension_fields` fills it), so the stub's
+    /// `field_name` does not name it: read it from the base table.
     pub fields: Vec<Option<String>>,
     /// The key's member names as declared (unquoted, lowercased by the
     /// lowerer), so a table extension's key can be resolved again against
