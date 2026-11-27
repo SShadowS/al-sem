@@ -4292,16 +4292,20 @@ fn cdo_slot_a_finished_gates_orphan_holds_no_timing_up() {
         .unwrap();
     assert!(Reap(gate_run).wait().unwrap().success());
     let want = format!("CDO_SLOT_DIR={}", s.dir().display());
-    let orphan = std::fs::read_dir("/proc")
-        .unwrap()
-        .flatten()
-        .filter_map(|e| e.file_name().to_string_lossy().parse::<u32>().ok())
-        .find(|p| {
-            let comm = std::fs::read_to_string(format!("/proc/{p}/comm")).unwrap_or_default();
-            let env = std::fs::read(format!("/proc/{p}/environ")).unwrap_or_default();
-            comm.trim() == "sleep" && env.split(|b| *b == 0).any(|v| v == want.as_bytes())
-        });
-    assert!(orphan.is_some(), "precondition: the gate left an orphan");
+    // Waited for, not looked at once: the stub's `(sleep 600 &)` child is
+    // still `t135-cargo` until its exec, which can come after the gate ends
+    // (TLS-150: one look failed under ENG-217's task gate).
+    until("precondition: the gate left an orphan", &|| {
+        std::fs::read_dir("/proc")
+            .unwrap()
+            .flatten()
+            .filter_map(|e| e.file_name().to_string_lossy().parse::<u32>().ok())
+            .any(|p| {
+                let comm = std::fs::read_to_string(format!("/proc/{p}/comm")).unwrap_or_default();
+                let env = std::fs::read(format!("/proc/{p}/environ")).unwrap_or_default();
+                comm.trim() == "sleep" && env.split(|b| *b == 0).any(|v| v == want.as_bytes())
+            })
+    });
     let (code, text) = s.run(
         "A",
         &["run", "lane", "after", "--timed", "--", "true"],
