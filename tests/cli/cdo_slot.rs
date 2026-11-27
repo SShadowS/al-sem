@@ -92,7 +92,10 @@ pub(crate) fn owned(cmd: &mut std::process::Command) -> &mut std::process::Comma
     SENTINEL.call_once(|| {
         use std::io::BufRead;
         // A clean environment (TLS-115), unmarked, its own group, so nothing
-        // it guards against can end it.
+        // it guards against can end it. Never waited for, by design: it ends
+        // only after this process is gone, so it is never this process's
+        // zombie.
+        #[allow(clippy::zombie_processes)]
         let mut sentinel = crate::clean_env::command(std::env::current_exe().unwrap())
             .args([
                 "cdo_slot::slot_test_sentinel",
