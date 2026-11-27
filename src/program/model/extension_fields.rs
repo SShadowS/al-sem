@@ -256,4 +256,137 @@ pub fn merge_extension_fields(
             });
         }
     }
+
+    // ENG-218 (sol r1): an extension whose stub count disagrees with its rows
+    // shares a stub between rows; it names a base only when every row
+    // resolved the same one (else the last row's would stand for all).
+    let mut row_bases: std::collections::HashMap<&str, Vec<Option<&str>>> =
+        std::collections::HashMap::new();
+    for (row, o) in objects.iter().enumerate() {
+        if o.object_type == "TableExtension" {
+            row_bases
+                .entry(o.id.as_str())
+                .or_default()
+                .push(base_ids[row].as_deref());
+        }
+    }
+    let mut stubs_of: std::collections::HashMap<String, Vec<usize>> =
+        std::collections::HashMap::new();
+    for (i, t) in workspace.tables.iter().enumerate() {
+        if t.is_extension_stub {
+            stubs_of.entry(t.id.clone()).or_default().push(i);
+        }
+    }
+    for o in objects.iter().filter(|o| o.object_type == "TableExtension") {
+        let bases = &row_bases[o.id.as_str()];
+        let Some(stubs) = stubs_of.get(&encode_table_id(&o.app_guid, o.object_number)) else {
+            continue;
+        };
+        if stubs.len() == bases.len() {
+            continue;
+        }
+        let agreed = bases
+            .first()
+            .copied()
+            .flatten()
+            .filter(|b| bases.iter().all(|x| *x == Some(*b)));
+        for &i in stubs {
+            workspace.tables[i].extends_table_id = agreed.map(str::to_string);
+        }
+    }
+}
+
+/// ENG-218: per object ROW of `ws.objects`, the table a tableextension row
+/// extends: its own `#if` alternative's stub's `extends_table_id` (the k-th
+/// row of an id takes the k-th stub, as [`merge_extension_fields`] pairs
+/// them), or, when the stub count disagrees with the rows, the shared stub's
+/// (named only when every row agreed). `None` for every other row and for an
+/// extension whose base is not known. One pass over objects and tables.
+#[must_use]
+pub fn extension_bases<'t>(
+    objects: &[super::workspace::ModelObject],
+    tables: &'t [super::workspace::ModelTable],
+) -> Vec<Option<&'t str>> {
+    let mut stubs_of: std::collections::HashMap<&str, Vec<usize>> =
+        std::collections::HashMap::new();
+    for (i, t) in tables.iter().enumerate() {
+        if t.is_extension_stub {
+            stubs_of.entry(t.id.as_str()).or_default().push(i);
+        }
+    }
+    let mut rows_of: std::collections::HashMap<&str, usize> = std::collections::HashMap::new();
+    let alternative: Vec<usize> = objects
+        .iter()
+        .map(|o| {
+            if o.object_type != "TableExtension" {
+                return 0;
+            }
+            let n = rows_of.entry(o.id.as_str()).or_insert(0);
+            *n += 1;
+            *n - 1
+        })
+        .collect();
+    objects
+        .iter()
+        .enumerate()
+        .map(|(row, o)| {
+            if o.object_type != "TableExtension" {
+                return None;
+            }
+            let stubs = stubs_of.get(encode_table_id(&o.app_guid, o.object_number).as_str())?;
+            let stub = if stubs.len() == rows_of[o.id.as_str()] {
+                stubs[alternative[row]]
+            } else {
+                *stubs.first()?
+            };
+            tables[stub].extends_table_id.as_deref()
+        })
+        .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::super::symbol_table::TableScope;
+    use super::super::symbol_table::tests::{numberless, tab};
+    use super::super::workspace::{ModelEntities, ModelObject};
+
+    fn ext_row(target: &str) -> ModelObject {
+        let mut o = numberless("E");
+        o.id = "e/TableExtension/10".into();
+        o.app_guid = "e".into();
+        o.object_type = "TableExtension".into();
+        o.object_number = 10;
+        o.extends_target_name = Some(target.into());
+        o
+    }
+
+    /// ENG-218 (sol r1): an `#if`-split tableextension whose two rows extend
+    /// different tables but whose stubs did not split (one stub for two rows)
+    /// names no base; its stub would otherwise carry the last row's.
+    /// Hand-stated: two rows of one id, one stub.
+    /// DISCRIMINATION (2026-11-27, break then restored, green): without the
+    /// agreement pass the stub names "x/table/2", failing "rows disagree".
+    #[test]
+    fn a_shared_stub_names_a_base_only_when_its_rows_agree() {
+        let scope = TableScope::stated(&[("e", &["e", "x"])], &[]);
+        let entities = |targets: [&str; 2]| {
+            let mut ws = ModelEntities {
+                objects: targets.into_iter().map(ext_row).collect(),
+                tables: vec![
+                    tab("x", 1, "A", false),
+                    tab("x", 2, "B", false),
+                    tab("e", 10, "E", true),
+                ],
+                routines: Vec::new(),
+            };
+            super::merge_extension_fields(&mut ws, &scope);
+            ws.tables[2].extends_table_id.clone()
+        };
+        assert_eq!(entities(["A", "B"]), None, "rows disagree");
+        assert_eq!(
+            entities(["A", "A"]).as_deref(),
+            Some("x/table/1"),
+            "rows agree"
+        );
+    }
 }

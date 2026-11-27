@@ -570,10 +570,13 @@ struct Sharing<'a> {
 }
 
 impl<'a> Sharing<'a> {
-    fn new(objects: &'a [ModelObject]) -> Self {
+    fn new(objects: &'a [ModelObject], tables: &[ModelTable]) -> Self {
+        // ENG-218 (Fable r1): a table extension row shares with the table its
+        // own alternative's stub says it extends.
+        let bases = super::extension_fields::extension_bases(objects, tables);
         let mut by_object: HashMap<&'a str, (Vec<String>, bool)> = HashMap::new();
-        for o in objects {
-            let (groups, base) = object_groups(o);
+        for (row, o) in objects.iter().enumerate() {
+            let (groups, base) = object_groups(o, bases[row]);
             // An `#if`-split object has a row per arm under one id: their
             // groups add up.
             let entry = by_object.entry(o.id.as_str()).or_default();
@@ -626,10 +629,26 @@ impl<'a> Sharing<'a> {
 }
 
 /// The sharing groups of one object row and whether it is a base object.
-fn object_groups(o: &ModelObject) -> (Vec<String>, bool) {
+/// `table_base`: for a table extension row, the table it extends (its stub's
+/// `extends_table_id`). A table and its extensions share by the TABLE ID
+/// (ENG-218, Fable r1: by name, an unrelated app's extension of a
+/// same-named table shared `Rec` with this one); pages and reports by name.
+fn object_groups(o: &ModelObject, table_base: Option<&str>) -> (Vec<String>, bool) {
+    match o.object_type.as_str() {
+        "Table" => {
+            let id = crate::engine::ids::encode_table_id(&o.app_guid, o.object_number);
+            return (vec![format!("table:{id}")], true);
+        }
+        "TableExtension" => {
+            return match table_base {
+                Some(id) => (vec![format!("table:{id}")], false),
+                None => (vec![format!("id:{}", o.id)], false),
+            };
+        }
+        _ => {}
+    }
     let family = match o.object_type.as_str() {
         "Page" | "PageExtension" => "page",
-        "Table" | "TableExtension" => "table",
         "Report" | "ReportExtension" => "report",
         _ => return (vec![format!("id:{}", o.id)], false),
     };
@@ -987,7 +1006,7 @@ impl<'a> Pass<'a> {
         routines: &[ModelRoutine],
         scope: &'a super::symbol_table::TableScope,
     ) -> Self {
-        let sharing = Sharing::new(objects);
+        let sharing = Sharing::new(objects, tables);
         let mut shared_auto: HashMap<String, Vec<String>> = HashMap::new();
         for routine in routines {
             for (key, arg, this) in auto_calc_calls(routine) {
@@ -1266,20 +1285,23 @@ codeunit 50102 "C"
             enum_impls: None,
         };
         assert_eq!(
-            object_groups(&obj("p", "Page", "Q Card", None)),
+            object_groups(&obj("p", "Page", "Q Card", None), None),
             (vec!["page:q card".to_string()], true)
         );
         assert_eq!(
-            object_groups(&obj("e", "PageExtension", "Q Ext", Some("Q Card"))),
+            object_groups(&obj("e", "PageExtension", "Q Ext", Some("Q Card")), None),
             (vec!["page:q card".to_string()], false)
         );
         assert_eq!(
-            object_groups(&obj(
-                "e",
-                "PageExtension",
-                "Q Ext",
-                Some("Microsoft.Sales.\"Q Card\"")
-            )),
+            object_groups(
+                &obj(
+                    "e",
+                    "PageExtension",
+                    "Q Ext",
+                    Some("Microsoft.Sales.\"Q Card\"")
+                ),
+                None
+            ),
             (
                 vec![
                     "page:microsoft.sales.\"q card\"".to_string(),
@@ -1288,12 +1310,25 @@ codeunit 50102 "C"
                 false
             )
         );
+        // ENG-218: a table and its extensions share by table id, the
+        // extension's from its stub (no stub base: no sharing).
         assert_eq!(
-            object_groups(&obj("t", "TableExtension", "T Ext", Some("Cust."))),
-            (vec!["table:cust.".to_string()], false)
+            object_groups(&obj("t", "Table", "Cust.", None), None),
+            (vec!["table:app/table/1".to_string()], true)
         );
         assert_eq!(
-            object_groups(&obj("c", "Codeunit", "C", None)),
+            object_groups(
+                &obj("t", "TableExtension", "T Ext", Some("Cust.")),
+                Some("app/table/1")
+            ),
+            (vec!["table:app/table/1".to_string()], false)
+        );
+        assert_eq!(
+            object_groups(&obj("t", "TableExtension", "T Ext", Some("Cust.")), None),
+            (vec!["id:t".to_string()], false)
+        );
+        assert_eq!(
+            object_groups(&obj("c", "Codeunit", "C", None), None),
             (vec!["id:c".to_string()], false)
         );
     }

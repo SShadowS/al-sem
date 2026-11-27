@@ -1308,35 +1308,44 @@ impl<'m> CrossRules<'m> {
         let field = field.map(|f| f.trim_matches('"').fold_identifier());
         // A table's id (`{app}/table/{number}`) is not its object's id
         // (`{app}/Table/{number}`): match the object by app and number, and
-        // its table extensions by the stubs that extend THIS table (ENG-218:
-        // the base each extension's own app sees, not the extended name, which
-        // an unrelated app's table may share). A stub's id is
-        // `{ext app}/table/{ext number}`.
-        let extensions: std::collections::HashSet<(&str, i64)> = self
-            .model
-            .workspace
-            .tables
-            .iter()
-            .filter(|t| t.is_extension_stub && t.extends_table_id.as_deref() == Some(table_id))
-            .map(|t| (t.app_guid.as_str(), t.table_number))
-            .collect();
+        // its table extensions by the object ROWS that extend THIS table
+        // (ENG-218: the base each extension row's own app sees, as its stub
+        // records it, not the extended name, which an unrelated app's table
+        // may share). A routine of a tableextension counts only when its own
+        // declaring row (its `#if` alternative) is one of them (sol r1: a
+        // split extension's other alternative may extend another table).
+        let ws = &self.model.workspace;
+        let bases =
+            crate::program::model::extension_fields::extension_bases(&ws.objects, &ws.tables);
         let mut objects: Vec<&str> = Vec::new();
-        for o in &self.model.workspace.objects {
+        let mut extension_rows: Vec<&crate::program::model::workspace::ModelObject> = Vec::new();
+        for (row, o) in ws.objects.iter().enumerate() {
             let is_table = o.object_type == "Table"
                 && o.object_number == table.table_number
                 && o.app_guid.eq_ignore_ascii_case(&table.app_guid);
-            let extends = o.object_type == "TableExtension"
-                && extensions.contains(&(o.app_guid.as_str(), o.object_number));
-            if is_table || extends {
+            if is_table {
                 objects.push(o.id.as_str());
+            } else if bases[row] == Some(table_id) {
+                objects.push(o.id.as_str());
+                extension_rows.push(o);
             }
         }
+        objects.sort_unstable();
+        objects.dedup();
+        let declaring = crate::program::model::declaring::DeclaringObjects::new(&ws.objects);
         let mut out: Vec<usize> = objects
             .iter()
             .flat_map(|o| self.ix.rows_of_object.get(*o).into_iter().flatten())
             .copied()
             .filter(|&i| {
                 let r = self.row(i);
+                if r.object_type == "TableExtension"
+                    && !declaring
+                        .of(r)
+                        .is_some_and(|d| extension_rows.iter().any(|e| std::ptr::eq(*e, d)))
+                {
+                    return false;
+                }
                 r.kind == "trigger"
                     && names.contains(&r.name.fold_identifier())
                     && r.enclosing_member

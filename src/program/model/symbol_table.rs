@@ -335,7 +335,9 @@ impl<'a> SymbolTable<'a> {
 /// ENG-194: what a table name may bind to, from the program graph: each app's
 /// dependency closure (its own guid included) and the model ids of the tables
 /// declared `ObsoleteState = Moved`/`Removed` ([`SymbolTable::table_by_name_from`]).
-#[derive(Debug, Clone, Default)]
+/// No `Default`: an empty scope sees each app's own tables only (`sees` is
+/// fail-closed), never "every table" (ENG-218, Fable r1).
+#[derive(Debug, Clone)]
 pub struct TableScope {
     /// app guid → the app guids it can see (itself included).
     visible: HashMap<String, std::collections::HashSet<String>>,
@@ -400,7 +402,7 @@ pub(crate) mod tests {
     use super::*;
 
     /// A field-less table `name` of `app`, number `n`.
-    fn tab(app: &str, n: i64, name: &str, stub: bool) -> ModelTable {
+    pub(crate) fn tab(app: &str, n: i64, name: &str, stub: bool) -> ModelTable {
         ModelTable {
             id: format!("{app}/table/{n}"),
             app_guid: app.to_string(),

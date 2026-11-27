@@ -3791,25 +3791,18 @@ impl RunBy {
                     && t.table_number == r.object_number
             }),
             _ => {
-                // ENG-218: the table the extension's stub says it extends (the
-                // base its own app sees), not a model-wide match of the
-                // extended name; `#if` alternatives that extend different
-                // tables name none.
+                // ENG-218: the table the routine's own declaring row (its `#if`
+                // alternative) extends, as its stub records it (the base its
+                // app sees), not a model-wide match of the extended name (sol
+                // r1, Fable r1: another alternative's base is no answer).
                 let tables = table_by_id_preferring_real(&model.workspace.tables);
-                let mut bases = model
-                    .workspace
-                    .tables
-                    .iter()
-                    .filter(|t| {
-                        t.is_extension_stub
-                            && t.app_guid == r.app_guid
-                            && t.table_number == r.object_number
-                    })
-                    .filter_map(|t| t.extends_table_id.as_deref());
-                let base = bases.next()?;
-                if bases.any(|b| b != base) {
-                    return None;
-                }
+                let objects = &model.workspace.objects;
+                let declaring = ix.data.declaring.of(objects, r)?;
+                let row = objects.iter().position(|o| std::ptr::eq(o, declaring))?;
+                let base = crate::program::model::extension_fields::extension_bases(
+                    objects,
+                    &model.workspace.tables,
+                )[row]?;
                 tables.get(base).copied()
             }
         }
