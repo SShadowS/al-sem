@@ -2889,11 +2889,40 @@ impl<'a> IrCfn<'a> {
                 op: UnaryOp::Not,
                 operand,
             } => self.tested_ops(*operand, on_then.map(|b| !b), on_else.map(|b| !b), out),
-            Binary { op, lhs, rhs } if matches!(op, BinaryOp::And | BinaryOp::Or) => {
-                let kept = *op == BinaryOp::And;
-                let k = |v: Option<bool>| v.filter(|b| *b == kept);
-                for s in [lhs, rhs] {
-                    self.tested_ops(*s, k(on_then), k(on_else), out);
+            Binary { op, lhs, rhs } => {
+                // sol r3: a Boolean literal operand. `X and true`, `X or false`, `X = true`,
+                // `X <> false`, `X xor false` are X; `X = false`, `X <> true`, `X xor true` are
+                // `not X`; `X and false` and `X or true` decide the value alone (one branch never
+                // runs), so nothing is known of X.
+                let (lit, other) = match (self.bool_literal(*lhs), self.bool_literal(*rhs)) {
+                    (Some(b), None) => (Some(b), *rhs),
+                    (None, Some(b)) => (Some(b), *lhs),
+                    _ => (None, *lhs),
+                };
+                let flip = |v: Option<bool>| v.map(|b| !b);
+                match (op, lit) {
+                    (BinaryOp::And | BinaryOp::Or, None) => {
+                        let kept = *op == BinaryOp::And;
+                        let k = |v: Option<bool>| v.filter(|b| *b == kept);
+                        for s in [lhs, rhs] {
+                            self.tested_ops(*s, k(on_then), k(on_else), out);
+                        }
+                    }
+                    (BinaryOp::And, Some(true)) | (BinaryOp::Or, Some(false)) => {
+                        self.tested_ops(other, on_then, on_else, out)
+                    }
+                    (BinaryOp::Eq, Some(b)) | (BinaryOp::Ne | BinaryOp::Xor, Some(b @ false)) => {
+                        let same = (*op == BinaryOp::Eq) == b;
+                        if same {
+                            self.tested_ops(other, on_then, on_else, out)
+                        } else {
+                            self.tested_ops(other, flip(on_then), flip(on_else), out)
+                        }
+                    }
+                    (BinaryOp::Ne | BinaryOp::Xor, Some(true)) => {
+                        self.tested_ops(other, flip(on_then), flip(on_else), out)
+                    }
+                    _ => {}
                 }
             }
             _ => {
@@ -2902,6 +2931,17 @@ impl<'a> IrCfn<'a> {
                 {
                     out.push((op, on_then, on_else));
                 }
+            }
+        }
+    }
+
+    /// `true` / `false` (through parentheses).
+    fn bool_literal(&self, mut e: ExprId) -> Option<bool> {
+        loop {
+            match &self.ir().expr(e).kind {
+                ExprKind::Parenthesized(x) => e = *x,
+                ExprKind::Literal(al_syntax::ir::Literal::Bool(b)) => return Some(*b),
+                _ => return None,
             }
         }
     }
@@ -3031,7 +3071,12 @@ impl<'a> IrCfn<'a> {
             While { cond, body } => {
                 let mut n = cfn_node("while");
                 n.children = Some(vec![self.build_block(*body)]);
-                n.condition_leaves = some_if(self.harvest_vec(*cond));
+                // sol r3: the body runs where the condition is true, the loop ends where false.
+                let mut leaves = self.harvest_vec(*cond);
+                if self.mark_tested_ops(*cond, &mut leaves) {
+                    n.rare_mut().path_hint = Some(PathHint::CondOp);
+                }
+                n.condition_leaves = some_if(leaves);
                 n.flow = self.flow_cond(*cond);
                 n
             }
@@ -3081,7 +3126,12 @@ impl<'a> IrCfn<'a> {
             Repeat { body, until } => {
                 let mut n = cfn_node("repeat");
                 n.children = Some(self.block_items(*body));
-                n.condition_leaves = some_if(self.harvest_vec(*until));
+                // sol r3: the loop ends where the condition is true, goes round where false.
+                let mut leaves = self.harvest_vec(*until);
+                if self.mark_tested_ops(*until, &mut leaves) {
+                    n.rare_mut().path_hint = Some(PathHint::CondOp);
+                }
+                n.condition_leaves = some_if(leaves);
                 n.flow = Self::flow_loop(self.expr_text(*until));
                 n
             }

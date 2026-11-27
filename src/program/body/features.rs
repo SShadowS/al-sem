@@ -1323,11 +1323,13 @@ pub enum PathHint {
     /// (through parentheses): whether it is negated. The call is the `if`'s
     /// last top-level condition leaf.
     CondCall { negated: bool },
-    /// ENG-177 (sol r1, r2): on an `if` whose condition holds a record operation
-    /// with no call site whose Boolean result the branch decides (`if A.Get(1)`,
-    /// `if not A.FindFirst or B`, through parentheses, `not`, `and`, `or`): its
-    /// condition leaves carry [`PCFNRare::missed_on`]. A branch where it found
-    /// nothing has not loaded the record.
+    /// ENG-177 (sol r1-r3): on an `if`, `while` or `repeat` whose condition holds a
+    /// record operation with no call site whose Boolean result the branch decides
+    /// (`if A.Get(1)`, `if not A.FindFirst or B`, `while A.Get(1) = false`, through
+    /// parentheses, `not`, `and`, `or` and a Boolean literal compared or combined with
+    /// it): its condition leaves carry [`PCFNRare::missed_on`] (`then` = the condition
+    /// true: an `if`'s then-branch, a `while` body, a `repeat`'s exit). A branch where
+    /// it found nothing has not loaded the record.
     CondOp,
     /// On an `exit(true)` / `exit(false)`: the literal value.
     Exit(bool),

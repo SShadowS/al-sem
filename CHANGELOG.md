@@ -1280,11 +1280,15 @@ ran beside the timing).
     `if A.Get(1) then exit; A.Modify()` is reported, `if not A.Get(1) then exit; A.Modify()` is
     silent, with or without parentheses (`if A.FindFirst then`), and inside `and`/`or`: past a
     false `A.Get(1) or B` the Get found nothing (reported), past a false `A.Get(1) and B` it may
-    have (silent). The statement tree marks such an `if` with a `CondOp` hint and each tested
-    operation leaf with the branch it is known to have missed on (CDO: 28 lines mix a record
-    operation with `and`/`or` in a condition). The r0 corpus's L2 feature snapshot moves for the
-    routines with such an `if`: each row gains the `CondOp` hint and nothing else (with the hint
-    read as none, every hash equals the old golden).
+    have (silent). A Boolean literal counts (sol r3): `A.Get(1) = false` is `not A.Get(1)`,
+    `A.Get(1) and true` is the Get, and `A.Get(1) or true` says nothing of it (its false branch
+    never runs, so nothing past it is reported). The same holds in loop conditions: a `while`
+    ends where its condition is false, a `repeat` where its `until` is true. The statement tree
+    marks such an `if`, `while` or `repeat` with a `CondOp` hint and each tested operation leaf
+    with the branch it is known to have missed on (CDO: 28 condition lines mix a record operation
+    with `and`/`or`, 9 compare one with `true`/`false`, 3 `while` and 1 `until` test one). The r0
+    corpus's L2 feature snapshot moves for the routines with such a node: each row gains the
+    `CondOp` hint and nothing else (with the hint read as none, every hash equals the old golden).
   - A ternary's two alternatives are exclusive (sol r1): `Ok := B ? A.Get(1) : A.Modify()` is
     reported. Each side is walked from the state before the ternary and the two are joined. A
     nested ternary, a ternary as an `if` condition and a `case` over a tested operation still

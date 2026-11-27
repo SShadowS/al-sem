@@ -224,6 +224,23 @@ impl<'a> Walk<'a> {
         self.seq(n.condition_leaves.as_ref(), st, depth)
     }
 
+    /// The state where `n`'s condition is true and where it is false. sol r1-r3: a tested
+    /// record operation in it ([`PathHint::CondOp`]: `if A.Get(1)`, `while not A.FindFirst or
+    /// B`) loads its record only where it found one; where its branch says it found nothing,
+    /// the record is as it was before it.
+    fn cond(&mut self, n: &PCFNNode, st: State, depth: usize) -> (State, State) {
+        if n.path_hint() != Some(PathHint::CondOp) {
+            let st = self.leaves(n, st, depth);
+            return (st.clone(), st);
+        }
+        let outer = self.branch.replace(true);
+        let on_true = self.leaves(n, st.clone(), depth);
+        self.branch = Some(false);
+        let on_false = self.leaves(n, st, depth);
+        self.branch = outer;
+        (on_true, on_false)
+    }
+
     /// Code no path reaches loads nothing: its operations and calls count as seen.
     fn mark_seen(&mut self, n: &PCFNNode) {
         for id in [&n.operation_id, &n.callsite_id].into_iter().flatten() {
@@ -262,20 +279,7 @@ impl<'a> Walk<'a> {
                 self.seq(n.children.as_ref(), st, depth)
             }
             "if" => {
-                // sol r1, r2: a tested record operation in the condition (`if A.Get(1)`,
-                // `if not A.FindFirst or B`) loads its record only where it found one; on a
-                // branch that says it found nothing, the record is as it was before it.
-                let (then_in, else_in) = if n.path_hint() == Some(PathHint::CondOp) {
-                    let outer = self.branch.replace(true);
-                    let then_in = self.leaves(n, st.clone(), depth);
-                    self.branch = Some(false);
-                    let else_in = self.leaves(n, st, depth);
-                    self.branch = outer;
-                    (then_in, else_in)
-                } else {
-                    let st = self.leaves(n, st, depth);
-                    (st.clone(), st)
-                };
+                let (then_in, else_in) = self.cond(n, st, depth);
                 let then = match n.children.as_ref().and_then(|c| c.first()) {
                     Some(b) => self.node(b, then_in, depth + 1),
                     None => then_in,
@@ -469,7 +473,7 @@ impl<'a> Walk<'a> {
         let mut head = pre.clone();
         let mut settled = false;
         for _ in 0..MAX_LOOP_ROUNDS {
-            let cond = self.leaves(n, head.clone(), depth);
+            let (cond, _) = self.cond(n, head.clone(), depth);
             let body = self.seq(n.children.as_ref(), cond, depth);
             let continues = self.loops.last_mut().and_then(|f| f.continues.take());
             let next = join(join(pre.clone(), &body), &continues);
@@ -484,7 +488,8 @@ impl<'a> Walk<'a> {
             self.gave_up = true;
             return None;
         }
-        let out = self.leaves(n, head, depth);
+        // The loop ends where the condition is false (a `for`/`foreach` has no CondOp).
+        let (_, out) = self.cond(n, head, depth);
         join(out, &frame.breaks)
     }
 
@@ -497,8 +502,10 @@ impl<'a> Walk<'a> {
         for _ in 0..MAX_LOOP_ROUNDS {
             let body = self.seq(n.children.as_ref(), head.clone(), depth);
             let continues = self.loops.last_mut().and_then(|f| f.continues.take());
-            after = self.leaves(n, join(body, &continues), depth);
-            let next = join(pre.clone(), &after);
+            // `until` true ends the loop, false goes round again.
+            let (done, again) = self.cond(n, join(body, &continues), depth);
+            after = done;
+            let next = join(pre.clone(), &again);
             if next == head {
                 settled = true;
                 break;

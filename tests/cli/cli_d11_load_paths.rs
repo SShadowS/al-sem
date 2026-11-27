@@ -443,6 +443,75 @@ codeunit 50501 "E Mgt"
         A.Modify();
     end;
 
+    // Silent (sol r3): `X or true` is always true, so nothing is known of Get past it (the Modify is
+    // never reached; reporting it would be a false finding).
+    procedure OrTrueExit()
+    var A: Record "E Entry";
+    begin
+        if A.Get(1) or true then
+            exit;
+        A.Modify();
+    end;
+
+    // Reported (sol r3): `X and true` is X.
+    procedure AndTrueExit()
+    var A: Record "E Entry";
+    begin
+        if A.Get(1) and true then
+            exit;
+        A.Modify();
+    end;
+
+    // Reported (sol r3): `X = true` is X.
+    procedure EqTrueExit()
+    var A: Record "E Entry";
+    begin
+        if A.Get(1) = true then
+            exit;
+        A.Modify();
+    end;
+
+    // Silent: `X = false` is `not X`; past it Get found a record.
+    procedure EqFalseExit()
+    var A: Record "E Entry";
+    begin
+        if A.Get(1) = false then
+            exit;
+        A.Modify();
+    end;
+
+    // Reported (sol r3): a `while` ends where its condition is false, so the Get found nothing.
+    procedure WhileTestedExit()
+    var A: Record "E Entry";
+    begin
+        while A.Get(1) do
+            exit;
+        A.Modify();
+    end;
+
+    // Reported (sol r3): a `repeat` ends where `until` is true: `not Get` true, Get found nothing,
+    // and each pass starts from a copy of N, never loaded. (Without that copy a pass that went round
+    // had found a record, and the walk keeps a failed Get's earlier state.)
+    procedure UntilNotTested()
+    var
+        A: Record "E Entry";
+        N: Record "E Entry";
+    begin
+        repeat
+            A := N;
+        until not A.Get(1);
+        A.Modify();
+    end;
+
+    // Silent: it ends where Get found a record.
+    procedure UntilTested()
+    var A: Record "E Entry";
+    begin
+        repeat
+        until A.Get(1);
+        A.Modify();
+    end;
+
     // Reported (sol r1): a ternary's alternatives are exclusive; the Modify's has no load.
     procedure TernaryExclusive(B: Boolean)
     var
@@ -533,7 +602,10 @@ fn reported(dir: &Path, detector: &str) -> BTreeSet<String> {
 /// `may_load` reading the other branch's `missed_on` fails `TestedGetExit`, `TestedFindExit`,
 /// `OrTestedExit` and `NotTestedGetExit`; `ir_walk::tested_ops`'s `and` passing a false value to its
 /// operands fails `AndTestedExit`, its `or` passing none fails `OrTestedExit`, and `not` not
-/// flipping fails `NotInOrExit` and `NotTestedGetExit`; the ternary run walked in sequence fails
+/// flipping fails `NotInOrExit` and `NotTestedGetExit`. sol r3: `X or true` read as X reports
+/// `OrTrueExit` (a false finding: that Modify never runs); `X = false` not flipped reports
+/// `EqFalseExit`; a `while` condition left unmarked fails `WhileTestedExit`; a `repeat`'s exit and
+/// loop-back states swapped fails `UntilNotTested`. The ternary run walked in sequence fails
 /// `TernaryExclusive`; each side walked from an empty state instead of the run's entry fails
 /// `TernaryKeepsEntryLoad` (`TernaryLoadThenModify` alone stayed green under that break: its load
 /// is inside the ternary).
@@ -552,11 +624,13 @@ fn a_load_must_reach_the_operation_on_some_path() {
     assert_eq!(
         reported(t.path(), "d11-modify-without-get"),
         set(&[
+            "AndTrueExit",
             "ByValueKeepsKill",
             "ChainKilled",
             "CopyKills",
             "CopyKillsLoad",
             "DeadLoadKeepsKill",
+            "EqTrueExit",
             "ErrorArgKeepsKill",
             "ErrorKills",
             "ExitKills",
@@ -566,6 +640,8 @@ fn a_load_must_reach_the_operation_on_some_path() {
             "TernaryExclusive",
             "TestedFindExit",
             "TestedGetExit",
+            "UntilNotTested",
+            "WhileTestedExit",
         ])
     );
     assert_eq!(
