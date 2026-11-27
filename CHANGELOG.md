@@ -21,7 +21,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   one added script reading an unlisted variable makes both fail at `gate-env`. Python runs with a
   scratch HOME, no user site, no PYTHONPATH and no pytest plugin autoload, so nothing in the
   developer's home changes the result. If `python3` has no pytest that way, the test takes a venv
-  named by `ALSEM_TEST_PYTHON`; otherwise it fails, and it skips only on GitHub CI, whose runner has
+  named by `ALSEM_TEST_PYTHON` (made absolute first, since the gate runs from a scratch folder;
+  refused when its folder holds no `python3`); otherwise it fails, and it skips only on GitHub CI, whose runner has
   no pytest. Two discrimination proofs: with `gate-env` taken out of `task`'s step list, and then
   out of `task-affected`'s, the test fails each time; restored, it passes.
 

@@ -2028,8 +2028,9 @@ fn ci_steps_all_runs_and_judges_the_agentflow_suite() {
 /// Python runs with a scratch HOME, no user site, no PYTHONPATH and no plugin
 /// autoload, so nothing from the developer's home changes the result (TLS-141
 /// reviews r1 and r2, sol). When `python3` has no pytest that way, the only
-/// other source is a venv named by `ALSEM_TEST_PYTHON` (its `python3`), put
-/// first on PATH; the user site is never added.
+/// other source is a venv named by `ALSEM_TEST_PYTHON` (its `python3`), whose
+/// bin folder, made absolute (`test_python_bin`), goes first on PATH; the user
+/// site is never added.
 ///
 /// Mutations (2026-11-26, r1 form re-checked 2026-11-27, the second again on
 /// the r2 form; each made with Edit):
@@ -2037,6 +2038,57 @@ fn ci_steps_all_runs_and_judges_the_agentflow_suite() {
 ///   printed no `=== ci-steps: gate-env ===`); restored -> passed.
 /// - `gate-env` taken out of `task-affected`'s step loop -> FAILED (the same
 ///   check, on the clean `task-affected` run); restored -> passed.
+/// TLS-141 review r3 (sol): the bin folder of the venv `ALSEM_TEST_PYTHON` names,
+/// as an absolute path. The gate runs in a scratch folder, so a relative one
+/// (`.venv/bin/python3`) would name the wrong folder there. Made absolute, never
+/// canonicalized: a venv's python3 is a symlink, and resolving it leaves the venv.
+/// Refused when that folder holds no `python3` (the name the gate runs).
+fn test_python_bin(raw: &std::ffi::OsStr) -> Result<std::path::PathBuf, String> {
+    let py = std::path::absolute(raw).map_err(|e| format!("ALSEM_TEST_PYTHON={raw:?}: {e}"))?;
+    let bin = py
+        .parent()
+        .ok_or_else(|| format!("ALSEM_TEST_PYTHON={raw:?}: no folder"))?;
+    if !bin.join("python3").is_file() {
+        return Err(format!(
+            "ALSEM_TEST_PYTHON={raw:?}: no python3 in {}",
+            bin.display()
+        ));
+    }
+    Ok(bin.to_path_buf())
+}
+
+/// `test_python_bin` on a relative path (from this process's folder) to a stub
+/// venv: the answer is absolute and is the stub's bin folder; a relative path to
+/// a folder with no python3 is refused.
+///
+/// Mutation (2026-11-27, with Edit): `std::path::absolute(raw)` replaced by the
+/// raw path -> FAILED (the answer was `../../../tmp/.../venv/bin`, not
+/// absolute); restored -> passed.
+#[cfg(unix)]
+#[test]
+fn test_python_bin_makes_a_relative_venv_absolute() {
+    let tmp = tempfile::tempdir().unwrap();
+    let bin = tmp.path().join("venv/bin");
+    std::fs::create_dir_all(&bin).unwrap();
+    std::fs::write(bin.join("python3"), "#!/bin/sh\n").unwrap();
+    let cwd = std::env::current_dir().unwrap();
+    let up = "../".repeat(cwd.components().count() - 1);
+    let rel =
+        |p: &std::path::Path| std::path::PathBuf::from(&up).join(p.strip_prefix("/").unwrap());
+    let got = test_python_bin(rel(&bin.join("python3")).as_os_str()).unwrap();
+    assert!(got.is_absolute(), "{}", got.display());
+    assert_eq!(
+        got.canonicalize().unwrap(),
+        bin.canonicalize().unwrap(),
+        "{}",
+        got.display()
+    );
+    let empty = tmp.path().join("empty/bin");
+    std::fs::create_dir_all(&empty).unwrap();
+    let err = test_python_bin(rel(&empty.join("python3")).as_os_str()).unwrap_err();
+    assert!(err.contains("no python3"), "{err}");
+}
+
 #[cfg(unix)]
 #[test]
 fn ci_steps_task_runs_the_gate_env_check() {
@@ -2060,10 +2112,11 @@ fn ci_steps_task_runs_the_gate_env_check() {
     let venv_bin = if has_pytest("python3".as_ref()) {
         None
     } else {
-        match std::env::var_os("ALSEM_TEST_PYTHON").map(std::path::PathBuf::from) {
-            Some(py) if has_pytest(py.as_os_str()) => {
-                Some(py.parent().expect("a venv's python3").to_path_buf())
-            }
+        let venv = std::env::var_os("ALSEM_TEST_PYTHON")
+            .map(|raw| test_python_bin(&raw).unwrap_or_else(|e| panic!("{e}")));
+        match venv {
+            // The probe runs the very python3 the gate finds first on PATH.
+            Some(bin) if has_pytest(bin.join("python3").as_os_str()) => Some(bin),
             _ if std::env::var_os("GITHUB_ACTIONS").is_some() => {
                 eprintln!("skip: no pytest on this CI runner");
                 return;
