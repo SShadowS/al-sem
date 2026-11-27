@@ -166,6 +166,23 @@ pub fn merge_extension_fields(
             .iter()
             .map(|f| (al_syntax::fold_identifier(&f.name), f.id.clone()))
             .collect();
+        // The members of the keys EARLIER alternatives of this same extension
+        // (its own id prefix) added, taken before this alternative adds any:
+        // a later alternative repeating one of them adds none, but two keys of
+        // one alternative never match each other (sol r6).
+        let own_prefix = format!(
+            "{base_table_id}/key/ext/{}/{}/",
+            object.app_guid, object.object_number
+        );
+        let earlier: Vec<Vec<String>> = if alt > 0 {
+            base.keys
+                .iter()
+                .filter(|b| b.id.starts_with(&own_prefix))
+                .map(|b| b.members.clone())
+                .collect()
+        } else {
+            Vec::new()
+        };
         for (index, k) in ext_keys.iter().enumerate() {
             let fields = k
                 .members
@@ -194,17 +211,10 @@ pub fn merge_extension_fields(
                     object.app_guid, object.object_number
                 )
             };
-            // Idempotent, as the field merge is; a LATER alternative repeating
-            // a key an earlier alternative of this same extension (its own id
-            // prefix) added, with the same members, adds none (Fable r5: never
-            // for an unsplit extension, never across apps).
-            let own_prefix = format!(
-                "{base_table_id}/key/ext/{}/{}/",
-                object.app_guid, object.object_number
-            );
-            if base.keys.iter().any(|b| {
-                b.id == id || (alt > 0 && b.id.starts_with(&own_prefix) && b.members == k.members)
-            }) {
+            // Idempotent, as the field merge is; a key repeating one an
+            // earlier alternative added (`earlier`) adds none (Fable r5: never
+            // by name, never for an unsplit extension, never across apps).
+            if base.keys.iter().any(|b| b.id == id) || earlier.contains(&k.members) {
                 continue;
             }
             base.keys.push(ModelKey {
