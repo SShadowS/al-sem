@@ -1327,8 +1327,8 @@ by Fable).
   (`recursion-on-route`, round 3); `loop-above-meet`, `site-other-edges`,
   `bulk-operation-on-route`, `repeated-trigger-on-route` and `repeated-subscriber-on-route`
   turned none. The sure-B change turned no `no` into a `yes`. Rounds 5 and 6 moved no answer and
-  no blocker in the sample: none of its routes passes a bulk operation, a report or page run, a
-  manual subscriber or a may-not-fire edge toward B.
+  no blocker in the sample: no pair met the new blockers, and no pair's answer depended on a
+  cut the sure-B change removes.
 - **What a path that ends before B leaves out (for cost):** a statement on such a path is read
   for its own records only. `commitsWithoutB` then misses a commit in a callee on such a path,
   and an error raised inside such a callee is in neither `errorsBetween` nor any commit's
