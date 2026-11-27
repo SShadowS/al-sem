@@ -32,6 +32,14 @@ def run(capsys, root, *args, gh_run, dry=False, run_id="run-test"):
     return code, json.loads(capsys.readouterr().out)
 
 
+def _verify_tree(clone, g, commit="master"):
+    """A real verification tree at the canonical path, made the production
+    way (`worktrees.create`, which returns a token, not the path)."""
+    p = worktrees.verify_path(clone)
+    worktrees.create(Ctx(Paths(clone)), g, p, g.rev(commit))
+    return p
+
+
 def test_dry_run_fetch_and_preflight_write_nothing(capsys, repo_pair, monkeypatch, tmp_path):
     _, clone = repo_pair
     # The grammar-presence check reads this file, and preflight's own
@@ -2559,7 +2567,7 @@ def test_a_verification_worktree_that_cannot_be_created_refuses_and_leaves_nothi
     monkeypatch.setattr(cli, "gates", lambda: [("noop", [sys.executable, "-c", "pass"], 1)])
     monkeypatch.setattr(cli, "cdo_gate", lambda: ("noop-cdo", [sys.executable, "-c", "pass"], 1))
 
-    def cannot_create(git, path, commit):
+    def cannot_create(ctx, git, path, commit):
         raise GitError(f"git worktree add --detach -q {path} {commit}: fatal: disk is full")
 
     monkeypatch.setattr(cli.worktrees, "create", cannot_create)
@@ -3433,8 +3441,7 @@ def test_cleanup_of_a_verification_worktree_takes_the_detached_route(capsys, rep
     `master`, created here with the production helper that owns the name."""
     _, clone = repo_pair
     g = Git(clone)
-    kept = worktrees.create(g, worktrees.verify_path(clone),
-                            g.rev("master"))
+    kept = _verify_tree(clone, g)
     assert kept.name.startswith(worktrees.VERIFY_PREFIX) and kept.is_dir()
     # The library refusal that makes the route necessary, stated first.
     with pytest.raises(RuntimeError, match="not an agentflow issue worktree"):
@@ -3495,7 +3502,7 @@ def test_cleanup_of_a_retained_verification_worktree_survives_the_dead_run_s_sta
     refuses (the last arm)."""
     _, clone = repo_pair
     g = Git(clone)
-    kept = worktrees.create(g, worktrees.verify_path(clone), g.rev("master"))
+    kept = _verify_tree(clone, g)
     assert kept.name.startswith(worktrees.VERIFY_PREFIX) and kept.is_dir()
 
     dead = Ctx(Paths(clone), run_id="dead-run", now=lambda: 1_000_000.0)
@@ -3532,7 +3539,7 @@ def test_cleanup_of_a_retained_verification_worktree_survives_the_dead_run_s_sta
     _slots(clone, 2)
     later = lk.heartbeat + lock.STALE_SECONDS + 1
     lock.acquire(Ctx(Paths(clone), run_id="sibling-run", now=lambda: later), 9, "s", 1)
-    again = worktrees.create(g, worktrees.verify_path(clone), g.rev("master"))
+    again = _verify_tree(clone, g)
     code, out = run(capsys, clone, "cleanup", "--worktree", str(again),
                     gh_run=FakeRunner(), run_id=None)
     assert code == 0 and not again.exists(), out
@@ -3541,7 +3548,7 @@ def test_cleanup_of_a_retained_verification_worktree_survives_the_dead_run_s_sta
 def _live_lane_holder(clone, g):
     """A run holding issue 8 and the merge lane, its lease stamped on an awake
     clock, a retained verification worktree, and HALT."""
-    kept = worktrees.create(g, worktrees.verify_path(clone), g.rev("master"))
+    kept = _verify_tree(clone, g)
     holder = Ctx(Paths(clone), run_id="live-run", now=lambda: 1_000_000.0, awake=lambda: ("b", 500.0))
     lock.acquire(holder, 8, "s", 1)
     write_json(holder, clone / ".agent" / "merge-lane.json",
@@ -3610,7 +3617,7 @@ def test_cleanup_deletes_the_worktree_outside_registry(capsys, repo_pair, monkey
     from agentflow.state import MutexTimeout, mutex as real_mutex
     _, clone = repo_pair
     g = Git(clone)
-    kept = worktrees.create(g, worktrees.verify_path(clone), g.rev("master"))
+    kept = _verify_tree(clone, g)
     free_during_delete = []
     real_rmtree = shutil.rmtree
 
@@ -3629,21 +3636,101 @@ def test_cleanup_deletes_the_worktree_outside_registry(capsys, repo_pair, monkey
     assert not kept.exists() and not list(clone.parent.glob(kept.name + ".removing-*"))
 
 
-def test_cleanup_sweeps_a_tombstone_an_earlier_cleanup_left(capsys, repo_pair):
-    """A cleanup that died between its rename and its delete leaves
-    `<name>.removing-<id>` behind. The next verification cleanup removes it
-    too (Fable final review, L2), and the tree it was asked for.
-    Red proof (Fable L2): the tombstone sweep removed from `cmd_cleanup`
-    failed here (the old tombstone was still there)."""
+def test_cleanup_reports_leftover_tombstones_and_deletes_none(capsys, repo_pair):
+    """A cleanup that died between its rename and its delete can leave a
+    `<tree>.removing-<id>` behind. Nothing on disk proves agentflow made it,
+    so the next verification cleanup only REPORTS such siblings
+    (`tombstones_left` and a hint) and deletes none of them (sol r10). Its
+    own tree goes. Three cases, all kept: a real leftover from `detach`, a
+    lookalike with a hex id, and one the old glob matched with any suffix.
+    Red proof (sol r10): the old `glob(f"{target.name}.removing-*")` +
+    `destroy` loop put back in `cmd_cleanup` failed here (all three deleted)."""
     _, clone = repo_pair
     g = Git(clone)
-    kept = worktrees.create(g, worktrees.verify_path(clone), g.rev("master"))
-    left = clone.parent / f"{kept.name}.removing-deadbeef"
-    left.mkdir()
-    (left / "evidence.txt").write_text("from a cleanup that died", encoding="utf-8")
+    home = worktrees.verify_path(clone)
+    home.mkdir()
+    (home / "precious.txt").write_text("from a cleanup that died", encoding="utf-8")
+    real = worktrees.detach(home)                    # the earlier cleanup's rename, then it died
+    assert real is not None
+    lookalike = clone.parent / f"{home.name}.removing-deadbeef"
+    any_suffix = clone.parent / f"{home.name}.removing-keep-me"
+    for d in (lookalike, any_suffix):
+        d.mkdir()
+        (d / "precious.txt").write_text("not agentflow's", encoding="utf-8")
+    kept = _verify_tree(clone, g)
     code, out = run(capsys, clone, "cleanup", "--worktree", str(kept), gh_run=FakeRunner(), run_id=None)
     assert code == 0 and out["removed"] == str(kept), out
-    assert not kept.exists() and not left.exists()
+    assert not kept.exists()
+    for d in (real, lookalike, any_suffix):
+        assert (d / "precious.txt").exists(), d
+    assert out["tombstones_left"] == sorted(str(d) for d in (real, lookalike, any_suffix)), out
+    assert "by hand" in out["hint"], out
+
+
+def test_explicit_cleanup_refuses_a_symlink_at_the_tree_path(capsys, repo_pair):
+    """A symlink at the verification tree's path is refused: it would steer
+    the delete to whatever it points at (here another verification-prefixed
+    sibling). The path is compared without resolving links (sol r10).
+    Proof (sol r14 run): with `cmd_cleanup`'s own `is_symlink` refusal
+    removed this test STAYED GREEN: the guarded step every lifecycle operation
+    shares (`worktrees._check_and_detach_held`) refuses a symlink too, so the
+    cleanup check is a second, explicit layer. That shared step is proven by
+    the unregistered-directory tests."""
+    _, clone = repo_pair
+    home = worktrees.verify_path(clone)
+    sibling = clone.parent / f"{worktrees.VERIFY_PREFIX}someone-elses"
+    sibling.mkdir()
+    (sibling / "precious.txt").write_text("not agentflow's", encoding="utf-8")
+    home.symlink_to(sibling, target_is_directory=True)
+    code, out = run(capsys, clone, "cleanup", "--worktree", str(home), gh_run=FakeRunner(), run_id=None)
+    assert code == 1 and "symlink" in out["error"], out
+    assert home.is_symlink() and (sibling / "precious.txt").exists()
+
+
+def test_explicit_cleanup_refuses_a_non_canonical_sibling(capsys, repo_pair):
+    """Only the verification tree itself can be removed by `cleanup
+    --worktree`: another verification-prefixed sibling of the checkout is
+    refused, and survives (sol r10).
+    Red proof (sol r14 run): the canonical-path check removed from
+    `cmd_cleanup` failed here, on the refusal's message. The sibling still
+    survived: since sol r11 the registration check refuses it too (it is no
+    worktree of this repository), so the canonical check is the first of two
+    layers."""
+    _, clone = repo_pair
+    sibling = clone.parent / f"{worktrees.VERIFY_PREFIX}merge-deadbeefcafe"
+    sibling.mkdir()
+    (sibling / "precious.txt").write_text("not agentflow's", encoding="utf-8")
+    code, out = run(capsys, clone, "cleanup", "--worktree", str(sibling), gh_run=FakeRunner(), run_id=None)
+    assert code == 1 and "only the verification tree itself" in out["error"], out
+    assert (sibling / "precious.txt").exists()
+
+
+def test_explicit_cleanup_refuses_an_unregistered_directory_at_the_tree_path(capsys, repo_pair):
+    """A real directory at the canonical path that git has not registered as a
+    worktree of this repository is not agentflow's: refused, untouched (sol
+    r11). A `.git` file pointing elsewhere does not make it one either.
+    Red proof (sol r11, run at sol r14): `cmd_cleanup` bypassing the guarded
+    step (a plain `worktrees.detach` instead of `_take_owned_held`) failed
+    here (the directory was moved aside and deleted)."""
+    _, clone = repo_pair
+    home = worktrees.verify_path(clone)
+    home.mkdir()
+    (home / "precious.txt").write_text("not agentflow's", encoding="utf-8")
+    (home / ".git").write_text(f"gitdir: {clone.parent / 'elsewhere' / '.git'}\n", encoding="utf-8")
+    code, out = run(capsys, clone, "cleanup", "--worktree", str(home), gh_run=FakeRunner(), run_id=None)
+    assert code == 1 and "not a worktree git registered" in out["error"], out
+    assert (home / "precious.txt").exists()
+    assert not list(clone.parent.glob(home.name + ".removing-*"))
+
+
+def test_registered_accepts_a_real_verification_worktree(repo_pair):
+    """The positive side of `worktrees.registered`: a tree `worktrees.create`
+    made is a registered worktree of this repository."""
+    _, clone = repo_pair
+    g = Git(clone)
+    kept = _verify_tree(clone, g)
+    assert worktrees.registered(g, kept)
+    assert not worktrees.registered(g, clone.parent)
 
 
 def test_a_queued_gate_survives_a_beat_that_times_out(ctx, monkeypatch):
@@ -3706,8 +3793,7 @@ def test_cleanup_refuses_a_verify_named_directory_outside_the_checkouts_parent(
     # ...and the SAME name inside the checkout's parent is still accepted, so
     # the conjunct narrowed the path rather than closing the documented exit.
     g = Git(clone)
-    kept = worktrees.create(g, worktrees.verify_path(clone),
-                            g.rev("master"))
+    kept = _verify_tree(clone, g)
     code, out = run(capsys, clone, "cleanup", "--worktree", str(kept),
                     gh_run=FakeRunner(), run_id="run-test")
     assert code == 0 and out["removed"] == str(kept), out

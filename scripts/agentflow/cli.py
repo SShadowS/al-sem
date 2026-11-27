@@ -1426,6 +1426,7 @@ def cmd_post_merge(args, ctx, gh, git):
     results: dict = {}
     timeouts: list[str] = []
     verify_wt = worktrees.verify_path(ctx.paths.root)
+    verify_token = None        # this attempt's reservation; teardown needs it (TLS-122 sol r14)
     ok, revert, halt, restore_failed, original_exc = True, None, None, None, None
     tree_anomaly: list[str] = []
     tree_anomaly_total = 0
@@ -1482,7 +1483,7 @@ def cmd_post_merge(args, ctx, gh, git):
             # sibling call site in `recovery.post_merge_failure` has always
             # been arranged this way.
             try:
-                worktrees.create(git, verify_wt, args.merge_sha)
+                verify_token = worktrees.create(ctx, git, verify_wt, args.merge_sha)
             except GitError as e:
                 raise Fail({"error": f"verify-worktree-failed: {e}"})
             for name, cmd, minutes in gate_list:
@@ -1584,15 +1585,16 @@ def cmd_post_merge(args, ctx, gh, git):
             # rides out in `halt.retained_worktree`; `agentflow cleanup
             # --worktree <path>` removes it once a human has looked.
             #
-            # KNOWN LIMIT, stated rather than discovered later: the retained
-            # tree is NOT permanent. `worktrees.verify_path` is ONE fixed
-            # path (see its docstring for why), and `worktrees.create`
-            # destroys whatever sits there before checking out -- so the NEXT
-            # post-merge, of any merge, reclaims it and the evidence is gone.
-            # That can only follow an operator clearing HALT, i.e. someone
-            # who has been told the tree is there; it is pinned at the unit
-            # level by `test_create_replaces_a_leftover_directory_...`.
-            removed = False if retain_verify_wt else worktrees.destroy(git, verify_wt)
+            # BY DESIGN, the retained tree is NOT permanent.
+            # `worktrees.verify_path` is ONE fixed path (see its docstring for
+            # why), and `worktrees.create` moves a leftover verification tree
+            # (a registered worktree, as this one is) aside and deletes it
+            # before checking out -- so the NEXT post-merge, of any merge,
+            # reclaims it and the evidence is gone. That can only follow an
+            # operator clearing HALT, i.e. someone who has been told the tree
+            # is there. (An occupant git has not registered is refused
+            # instead, never deleted: TLS-122 sol r12.)
+            removed = False if retain_verify_wt else worktrees.remove(ctx, git, verify_wt, verify_token)
         if killed is not None:
             # HALT, never revert: the same routing a dirty tree gets, and for
             # the same reason. Automatic revert requires a gate to have
@@ -1918,6 +1920,18 @@ def cmd_cleanup(args, ctx, gh, git):
                                  "checkout's parent directory",
                         "worktree": str(target),
                         "expected_parent": str(ctx.paths.root.parent.resolve())})
+        # ONLY THE CANONICAL TREE, as given, never through a link (sol r10): the
+        # path is compared WITHOUT resolving symlinks, and a symlink is refused,
+        # so a link at the fixed path cannot steer the delete to another
+        # verification-prefixed sibling, and no other sibling is removed here.
+        canonical = worktrees.verify_path(ctx.paths.root)
+        target = Path(os.path.abspath(args.worktree))
+        if target != canonical:
+            raise Fail({"error": "only the verification tree itself can be removed this way",
+                        "worktree": str(target), "expected": str(canonical)})
+        if target.is_symlink():
+            raise Fail({"error": "refusing a symlink at the verification tree's path",
+                        "worktree": str(target)})
         # The DECISION, under mutex `registry` (sol r4): between the unlocked
         # check above and the delete, the lane holder could beat or a new run
         # take the lane. Under `registry` neither can happen until the tree is
@@ -1930,18 +1944,31 @@ def cmd_cleanup(args, ctx, gh, git):
             if state == "busy":
                 raise lock.FenceError(f"merge lane is held by live run {lane['run_id']}, "
                                       f"context is {ctx.run_id}")
+            # OWNERSHIP from outside the tree (sol r11) and the move aside, in the
+            # one guarded step every lifecycle operation on this path shares
+            # (`worktrees._take_owned_held`, sol r12/r13): it also refuses a tree
+            # another running invocation reserved. The contract: the
+            # verification-tree path is reserved for agentflow, and a writer
+            # outside its `registry` lock is outside the trust model.
             try:
-                tomb = worktrees.detach(target)
+                tomb = worktrees._take_owned_held(ctx, git, target)
+            except worktrees.NotOurs as e:
+                raise Fail({"error": f"refusing to remove the verification tree: {e}",
+                            "worktree": str(target)})
             except OSError as e:
                 raise Fail({"error": f"could not move {args.worktree} aside: {e}"})
         if tomb is not None and not worktrees.destroy(git, tomb):
             raise Fail({"error": f"could not remove {tomb} (moved aside from {args.worktree})"})
-        # Tombstones an earlier cleanup left (it died between its rename and its
-        # delete): detached by construction, so nothing uses them. Best-effort,
-        # like every teardown.
-        for old in target.parent.glob(f"{target.name}.removing-*"):
-            worktrees.destroy(git, old)
-        return _emit({"removed": args.worktree})
+        # What an earlier cleanup that died between its rename and its delete
+        # may have left: REPORTED, never deleted (sol r10). Nothing on disk
+        # proves agentflow made it, so removing it is the operator's call.
+        out = {"removed": args.worktree}
+        left = worktrees.leftover_tombstones(canonical)
+        if left:
+            out["tombstones_left"] = left
+            out["hint"] = ("not removed: agentflow cannot prove it made these; inspect each "
+                           "and delete it by hand if it is a leftover verification tree")
+        return _emit(out)
     # `is None` -- ABSENT, not empty. `--branch ""` was given and is wrong,
     # and `_validate_branch_name` below is the guard that says so ("not a
     # plain branch name"); turning it into a usage error here would retire

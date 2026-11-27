@@ -258,9 +258,10 @@ def post_merge_failure(ctx: Ctx, git: Git, gh: Gh, issue: int, merge_sha: str,
                     "nothing reverted or pushed. HALT set.",
                     "local master diverged from origin/master, refusing to act")
     wt = worktrees.verify_path(ctx.paths.root)
+    token = None               # this attempt's reservation; teardown needs it (TLS-122 sol r14)
     try:
         try:
-            worktrees.create(git, wt, merge_sha)
+            token = worktrees.create(ctx, git, wt, merge_sha)
         except GitError as e:
             return done(False, False, "revert-worktree-failed",
                         f"a clean worktree to build the revert in could not be created ({e}). "
@@ -292,7 +293,7 @@ def post_merge_failure(ctx: Ctx, git: Git, gh: Gh, issue: int, merge_sha: str,
             return done(True, False, "push-rejected",
                         "revert push REJECTED. HALT set.", "revert push rejected", revert_sha)
     finally:
-        worktrees.destroy(git, wt)
+        worktrees.remove(ctx, git, wt, token)
     # `reopen=True`, never a `gh.reopen_issue(issue)` call here: this is the
     # one exit that has already rewritten `origin/master`, so its durable
     # record must land before any GitHub write. See `done`.

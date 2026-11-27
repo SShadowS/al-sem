@@ -299,9 +299,38 @@ Labels are a mirror for humans, not a lock. The lock is local:
       it, moves the tree off its fixed path (one rename to
       `<name>.removing-<id>`), so no new lane owner can come in between; the
       slow delete and `git worktree prune` run after `registry` is released,
-      so no beat waits on them (sol r5). A tombstone a cleanup left (it died
-      between rename and delete) is swept by the next verification cleanup,
-      or removed with `cleanup --worktree <tombstone>`;
+      so no beat waits on them (sol r5). `cleanup --worktree` takes only the
+      canonical verification tree path, compared without resolving symlinks,
+      and refuses a symlink there (sol r10). Under `registry`, before the
+      rename, it also requires evidence from outside the tree that the
+      directory is agentflow's: the main checkout's `git worktree list`
+      names it, and its `.git` file points into this repository's
+      `worktrees/` directory; otherwise it refuses and touches nothing (sol
+      r11). THE CONTRACT: the verification-tree path, under the checkout's
+      parent, is reserved for agentflow, and only agentflow writes it, under
+      `registry`; a writer outside that lock is outside the trust model, as a
+      hand edit of `.agent/` is. agentflow keeps it itself (sol r12): every
+      lifecycle operation on the tree (post-merge's `create` and teardown,
+      the revert worktree, cleanup) checks the occupant and moves it aside in
+      one guarded step under `registry` (`worktrees._take_owned_held`).
+      `create` refuses an unregistered occupant (`NotOurs`) instead of
+      deleting it. The tree belongs to the create attempt that made it (sol
+      r13, r14): before `git worktree add`, `create` writes a reservation
+      outside the tree (`.agent/verify-reservations/<tree>.json`: pid,
+      process start time, nonce, attempt) and returns it as a token.
+      Teardown (`remove(token)`) acts only while the reservation equals that
+      token; a refused create has no token, so its `finally` touches
+      nothing. Another invocation's reservation is reclaimed only by a new
+      `create` or an explicit cleanup, and only when its owner is DEAD.
+      Liveness is ALIVE, DEAD or UNKNOWN: an unreadable `/proc/<pid>/stat`,
+      or an existing PID where there is no /proc, is UNKNOWN and never
+      reclaimed; cleanup reports it with the file to delete by hand.
+      `remove` never raises (a busy `registry` or a failing `destroy`).
+      `git worktree list` counts as a read for the `git` mutex. A `<tree>.removing-<id>` left by
+      a cleanup that died between rename and delete is never deleted
+      automatically: the next cleanup lists such siblings (string
+      operations) as `tombstones_left` with a hint, since nothing on disk
+      proves agentflow made one; removing it is the operator's call;
     - `recover`'s steal and `take_lane`.
 
     Reporting (`status`, `preflight`, `merge-gate`) reads unlocked. A periodic

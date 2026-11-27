@@ -89,9 +89,16 @@ class Git:
         nest it."""
         self.cwd, self.run, self.mutex = str(cwd), run, mutex
 
+    @classmethod
+    def is_write(cls, args) -> bool:
+        """Whether a subcommand takes the `git` mutex. `worktree list` only
+        reads (TLS-122 sol r12): `worktrees.registered` runs it while holding
+        mutex `registry`, which must not wait behind a fetch or other writer."""
+        return bool(args) and args[0] in cls.WRITES and tuple(args[:2]) != ("worktree", "list")
+
     def _run(self, *args: str, check: bool = True) -> subprocess.CompletedProcess:
         argv = ["git", "-C", self.cwd, *args]
-        if self.mutex is not None and args and args[0] in self.WRITES:
+        if self.mutex is not None and self.is_write(args):
             with self.mutex():
                 r = self.run(argv, capture_output=True, text=True)
         else:

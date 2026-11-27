@@ -10,6 +10,28 @@ from agentflow.gitops import Git, GitError
 from agentflow.tests.conftest import commit_file
 
 
+def test_worktree_list_is_a_read_and_other_worktree_subcommands_write(repo_pair):
+    """`worktree list` takes no `git` mutex: `worktrees.registered` runs it
+    while holding mutex `registry`, which must not wait behind a fetch or
+    another writer (TLS-122 sol r12). `worktree prune` still writes.
+    Red proof (sol r12): the `("worktree", "list")` exception removed from
+    `Git.is_write` failed here (the list took the mutex)."""
+    from contextlib import contextmanager
+    _, clone = repo_pair
+    taken = []
+
+    @contextmanager
+    def recording():
+        taken.append(True)
+        yield
+
+    g = Git(clone, mutex=recording)
+    assert "worktree " in g.out("worktree", "list", "--porcelain")
+    assert taken == []
+    g.worktree_prune()
+    assert taken == [True]
+
+
 def test_basic_queries(repo_pair):
     origin, clone = repo_pair
     g = Git(clone)

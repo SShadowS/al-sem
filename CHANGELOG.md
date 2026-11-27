@@ -970,9 +970,44 @@ its time rules on the wall clock, which keeps counting through a suspend.
   - `resolve incident` keeps it through the incident write.
   - Verification `cleanup` re-checks the lane under it and moves the tree aside (one rename to
     `<name>.removing-<id>`). The recursive delete and `git worktree prune` run after the lock
-    is released, so a slow delete starves no beat. An orphaned lane is still `recover`'s. A
-    tombstone left by a cleanup that died between its rename and its delete is swept by the
-    next verification cleanup (`cleanup --worktree <tombstone>` also removes one by hand).
+    is released, so a slow delete starves no beat. An orphaned lane is still `recover`'s.
+  - Explicit `cleanup --worktree` of a verification tree accepts only the canonical
+    verification tree path, compared without resolving symlinks, and refuses a symlink there.
+    Before, any verification-prefixed sibling was accepted, and a link could steer the delete
+    to one (sol r10). Before it moves the tree, it also requires evidence from outside the
+    tree that the tree is agentflow's: git's `worktree list` for this repository names it,
+    and its `.git` file points into this repository's `worktrees/` directory. Otherwise it
+    refuses and touches nothing (sol r11). The contract: the verification-tree path, under
+    the checkout's parent, is reserved for agentflow, which writes it only under `registry`;
+    a writer outside that lock is outside the trust model, as a hand edit of `.agent/` is.
+    agentflow keeps that contract itself (sol r12). Every lifecycle operation on the tree
+    (post-merge's create and teardown, the revert worktree in `post_merge_failure`, and
+    cleanup) checks the occupant and moves it aside in one guarded step under `registry`
+    (`worktrees._take_owned_held`, through `create`, `remove` or cleanup). `create` now refuses
+    an occupant git has not registered (`NotOurs`) instead of deleting it. `git worktree list`
+    counts as a read, so this check never waits on the `git` mutex while holding `registry`.
+  - The tree belongs to the create attempt that made it (sol r13, r14). Under `registry`,
+    before `git worktree add`, `create` writes a reservation outside the tree,
+    `.agent/verify-reservations/<tree>.json`. It names this invocation (pid, process start
+    time, a nonce) and this attempt, and `create` returns it as a token.
+    - Teardown (`remove(token)`) acts only while the reservation still equals that token. A
+      refused create returns no token, so its `finally` touches nothing. When two
+      invocations of one run race, the loser leaves the winner's tree intact, even if the
+      winner exits in between.
+    - Reclaiming another invocation's reservation happens only in a new `create` or an
+      explicit cleanup, and only when its owner is provably DEAD. Liveness has three values:
+      with /proc, no process or a different start time (a reused PID) is DEAD, and a stat
+      that cannot be read is UNKNOWN; without /proc, a PID that still exists is UNKNOWN.
+      UNKNOWN is never reclaimed: `create` refuses, and cleanup reports it with the
+      reservation file to delete by hand.
+    - `remove` is fully best-effort: a busy `registry` or a failing `destroy` (`git worktree
+      prune` timing out on the `git` mutex) is logged to stderr, never raised, so a `finally`
+      keeps its own result.
+  - A cleanup that dies between its rename and its delete can leave `<tree>.removing-<id>`.
+    The next cleanup lists such siblings (plain string operations) as `tombstones_left`, with
+    a hint, and deletes none of them. Nothing on disk can prove agentflow made one, and a
+    check-then-delete could hit whatever replaced it, so removing one is the operator's call
+    (sol r9, r10).
   - A periodic beat that times out on `registry` is skipped, not fatal.
   - `require_operator` is now a context manager: `clear-halt` and `resolve incident` act inside
     it, so its live-run check and their action share one hold of `registry`.
@@ -983,7 +1018,7 @@ its time rules on the wall clock, which keeps counting through a suspend.
 - **Why not "stale only when the holder process is dead":** a run is a series of short
   `agentflow` calls made by a conductor session, so between calls no process holds the lease,
   and a session that stopped working must still lose its lease.
-- **Review history (Fable r1, r2 and final; sol r1-r8):** a lease file with an unknown field
+- **Review history (Fable r1, r2 and final; sol r1-r11):** a lease file with an unknown field
   still loads, and the clock tests run on any OS. One intermediate design kept the stamps in
   sidecar files so that older executors could read the lease. Two files could disagree after
   one failed or interrupted write, and every repair left a gap. sol r6 showed a failed FIRST
@@ -991,8 +1026,12 @@ its time rules on the wall clock, which keeps counting through a suspend.
   the stamps went back inside the lease and `budget.json`. sol r7 put `release` back under
   `registry` and required zero lease files for a rollback. sol r8 and Fable's final review
   passed it; the final review's follow-ups added tests that pin the awake clock at the
-  operator guard and the lane state, the tombstone sweep and the `require_operator` context
-  manager.
+  operator guard and the lane state, and the `require_operator` context manager. Its
+  automatic tombstone sweep did not survive review: sol r9 found it globbed a caller-chosen
+  name, and sol r10 found that no on-disk marker can prove ownership and that a
+  check-then-delete races. Leftovers are now only reported, and explicit cleanup takes only
+  the canonical tree path. sol r11 then asked for ownership evidence from outside the tree:
+  git's worktree registration for this repository.
 
 ### Fixed (ENG-178: table procedures named like record built-ins: four follow-ups from ENG-173)
 
