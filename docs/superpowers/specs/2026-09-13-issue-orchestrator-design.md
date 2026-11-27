@@ -176,7 +176,7 @@ instructions to the flow. Concretely:
 | Rebase-driven re-gate | 1 | `blocked` |
 | CI fix attempt | 1, independent of the rebase budget | `blocked` |
 | Discoveries filed per issue | 5 | rest go to the ledger only |
-| Wall-clock per issue | 24 h from claim (4 h until 2026-10-14, when a 5-round spec panel alone took 3-4 h; 10 h until 2026-10-24, when epic steps ran past 10 h and lost a restart plus an overnight wait to the cap) | `blocked` |
+| Wall-clock per issue | 24 h from claim, of awake time since TLS-122 (a host suspend is left out; see Deadline) (4 h until 2026-10-14, when a 5-round spec panel alone took 3-4 h; 10 h until 2026-10-24, when epic steps ran past 10 h and lost a restart plus an overnight wait to the cap) | `blocked` |
 | Subagent dispatches per issue | 60 | `blocked` |
 | pi calls per issue | 20 (2 reviewers × up to 10 rounds; 14 until 2026-10-14) | `blocked` |
 | Per-gate timeout (supervised, below) | 45 min | gate fails |
@@ -209,7 +209,8 @@ was recorded outside the budget.
 Labels are a mirror for humans, not a lock. The lock is local:
 
 - **One lease per issue.** `.agent/locks/issue-<N>.json` in the main checkout:
-  `{issue, run_id, session, started, heartbeat, attempt, recovering_by}`.
+  `{issue, run_id, session, started, heartbeat, attempt, recovering_by,
+  beat_awake}` (`beat_awake`: the awake clock at `heartbeat`, see Stale).
   Taken at claim by create-exclusive on that file, so "one run per issue" holds
   by construction. Both `/orchestrate` and a standalone `/issue N` take it;
   `/issue N` refuses to run without it. Every lease write after the first is
@@ -275,9 +276,99 @@ Labels are a mirror for humans, not a lock. The lock is local:
   (`al-sem-issue-<N>-a<k>`) is fenced by issue N's lease only; of a
   verification worktree, by a LIVE merge-lane holder only.
 - **Deadline.** The executor computes elapsed time since claim on every call and
-  refuses new phases past the 24-hour cap, so the wall-clock budget is enforced by
-  code, not by the conductor remembering it.
-- **Stale** means heartbeat older than 30 minutes. There is no PID check: the
+  refuses new phases past the 24-hour cap, so the time budget is enforced by
+  code, not by the conductor remembering it. Since TLS-122 the elapsed time is
+  AWAKE time, so a host suspend (server1 is a laptop) is not counted:
+  `budget.json` records the awake clock at the claim (`claimed_awake`), under
+  its checksum, in the same write as `claimed_at`.
+- **Stale** means no heartbeat for 30 minutes of AWAKE time (TLS-122). Each
+  heartbeat writes the awake clock reading (`beat_awake`) INTO the lease, so
+  one atomic write (a temp file, then `os.replace`; the claim's
+  create-exclusive write) publishes the heartbeat and its stamp together: no
+  lease is ever acknowledged without the stamp it was beaten with, and a
+  failed write leaves the previous lease whole (sol r6). An earlier design kept
+  the stamp in a sidecar file; two files could disagree after one failed or
+  interrupted write, and every repair of that left a gap (sol r2-r6).
+  - **Commands that ACT on liveness decide under mutex `registry`** (sol r4).
+    Every lease writer holds it too (`beat` included), so nothing changes a
+    lease between their check and their action. These commands are:
+    - `clear-halt` and `resolve incident`: they act inside
+      `lock.require_operator` (a context manager), whose live-run guard keeps
+      `registry` through the HALT unlink and the incident write;
+    - verification `cleanup`: it re-checks the lane under it and, still under
+      it, moves the tree off its fixed path (one rename to
+      `<name>.removing-<id>`), so no new lane owner can come in between; the
+      slow delete and `git worktree prune` run after `registry` is released,
+      so no beat waits on them (sol r5). `cleanup --worktree` takes only the
+      canonical verification tree path, compared without resolving symlinks,
+      and refuses a symlink there (sol r10). Under `registry`, before the
+      rename, it also requires evidence from outside the tree that the
+      directory is agentflow's: the main checkout's `git worktree list`
+      names it, and its `.git` file points into this repository's
+      `worktrees/` directory; otherwise it refuses and touches nothing (sol
+      r11). THE CONTRACT: the verification-tree path, under the checkout's
+      parent, is reserved for agentflow, and only agentflow writes it, under
+      `registry`; a writer outside that lock is outside the trust model, as a
+      hand edit of `.agent/` is. agentflow keeps it itself (sol r12): every
+      lifecycle operation on the tree (post-merge's `create` and teardown,
+      the revert worktree, cleanup) checks the occupant and moves it aside in
+      one guarded step under `registry` (`worktrees._check_and_detach_held`,
+      reached by `create` and cleanup through `_take_owned_held`).
+      `create` refuses an unregistered occupant (`NotOurs`) instead of
+      deleting it. The tree belongs to the create attempt that made it (sol
+      r13, r14): before `git worktree add`, `create` writes a reservation
+      outside the tree (`.agent/verify-reservations/<tree>.json`: pid,
+      process start time, nonce, attempt) and returns it as a token.
+      Teardown (`remove(token)`) acts only while the reservation equals that
+      token; a refused create has no token, so its `finally` touches
+      nothing. Another invocation's reservation is reclaimed only by a new
+      `create` or an explicit cleanup, and only when its owner is DEAD.
+      Liveness is ALIVE, DEAD or UNKNOWN: an unreadable `/proc/<pid>/stat`,
+      or an existing PID where there is no /proc, is UNKNOWN and never
+      reclaimed; cleanup reports it with the file to delete by hand.
+      `remove` never raises (a busy `registry` or a failing `destroy`).
+      `git worktree list` counts as a read for the `git` mutex. A `<tree>.removing-<id>` left by
+      a cleanup that died between rename and delete is never deleted
+      automatically: the next cleanup lists such siblings (string
+      operations) as `tombstones_left` with a hint, since nothing on disk
+      proves agentflow made one; removing it is the operator's call;
+    - `recover`'s steal and `take_lane`.
+
+    Reporting (`status`, `preflight`, `merge-gate`) reads unlocked. A periodic
+    beat that times out on `registry` is skipped, not fatal.
+  - **The awake clock** is `[clock id, CLOCK_MONOTONIC]`. CLOCK_MONOTONIC stops
+    while the host sleeps. The clock id is the boot id plus the process's time
+    namespace offset for CLOCK_MONOTONIC (`/proc/self/timens_offsets`; 0 without
+    one), so readings are compared only within one boot and one offset.
+  - **The wall clock judges instead** when there is no usable reading. That is:
+    another clock id; a malformed reading (not `[str, number]`, not finite,
+    negative, or more than 60 s ahead of the reader's clock); a lease written
+    before TLS-122; or no awake clock at all (not Linux). The wall age is never
+    an upper bound on the awake age: a backward wall step must not shorten a
+    real one. The stamp is exactly as trusted as the heartbeat in the same
+    file.
+  - **Clock-sharing limit:** processes that share one `.agent/` must share the
+    host. On another host the clock ids differ and the wall clock judges, which
+    is the rule before TLS-122.
+  - **Rollout: a drain is MANDATORY.** An executor from before TLS-122 cannot
+    share `.agent/` with this one. It builds `Lock(**data)` and fails on
+    `beat_awake`, and its checksum rejects a `budget.json` with
+    `claimed_awake`. Even on its own files it is unsafe beside a newer run: its
+    `recover` judges every lease on the wall clock (it can take a live run's
+    lease after a suspend), and its `beat` does not take `registry`.
+    - **Upgrade:** stop new claims; let every run of the old executor finish,
+      or recover it, until no run is live; then switch. A lease or budget left
+      from before TLS-122 still loads here and is timed on the wall clock.
+    - **Rollback:** stop new claims; finish or recover EVERY lease with the
+      new executor until there are ZERO lease files (`status` lists none);
+      then switch. A stale lease is not enough: the old executor fails in
+      `Lock(**data)` on a lease with `beat_awake` before it can even judge
+      staleness, so a stale lease would block its `recover` too (sol r7).
+  - **`beat` and `release` take mutex `registry`** (TLS-122), like every
+    lease writer: a beat cannot write an old copy of the lease back over
+    `recover`'s steal, nor publish a lease again after `release` returned.
+
+  There is no PID check: the
   conductor is a chat session, not a supervisable process, and a 30-minute silence
   with supervision in place means it is gone. Recovery (never under `--dry-run`)
   is per issue: `preflight` lists `stale_locks`, and `recover --issue N` takes ONE
@@ -307,7 +398,7 @@ Labels are a mirror for humans, not a lock. The lock is local:
 - **Attempts.** Every claim gets an attempt number. Branch and worktree are
   `issue/N-<slug>-a<attempt>` and `../al-sem-issue-N-a<attempt>`, so a re-attempt
   after `unblock` never collides with a preserved branch.
-- The wall-clock cap is enforced by the running session on itself, never by another
+- The time cap is enforced by the running session on itself, never by another
   session.
 
 ## `/orchestrate` — one tick
@@ -497,9 +588,14 @@ human for what the flow can finish itself.
 ### Isolation: the gates never run in the shared checkout
 
 The shared checkout stays on `master` for the whole command. The merge SHA is
-materialised in a disposable detached worktree (`../al-sem-verify-tree`, one
-FIXED path, a sibling of the repo root, deliberately outside the glob that finds
-issue worktrees), and that directory is torn down in a `finally`. Until 2026-10-21
+materialised in a disposable detached worktree (`../al-sem-verify-<root name>`,
+one FIXED path per checkout root, a sibling of the repo root, deliberately
+outside the glob that finds issue worktrees), and that directory is torn down in
+a `finally`. It is named after the root (TLS-122 sol r17) because the merge
+lane, the `registry` lock and the tree's reservation all live in that root's
+`.agent/`: checkouts of one repository side by side (server1's lane worktrees
+share one parent) each get their own tree, and one root's cleanup never reaches
+another's. Until 2026-10-21
 the path carried the merge SHA (`../al-sem-verify-merge-<sha12>`); see the build
 cache bullet below for why it no longer does.
 

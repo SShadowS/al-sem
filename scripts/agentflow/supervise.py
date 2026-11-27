@@ -20,7 +20,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable
 
-from .state import Ctx
+from .state import Ctx, MutexTimeout
 
 # BASH_ENV / ENV (TLS-63 review r1, sol): a startup file a non-interactive bash
 # runs before the gate script, so one with `exit 0` would turn any gate green
@@ -131,7 +131,11 @@ def run(ctx: Ctx, cmd: list[str], *, cwd: Path, log_path: Path, timeout_s: float
                 break
             except subprocess.TimeoutExpired:
                 if beat is not None:
-                    beat(ctx)
+                    try:
+                        beat(ctx)
+                    except MutexTimeout:
+                        pass        # `registry` busy past its timeout: beat next round
+
                 if time.monotonic() - start > timeout_s:
                     _kill_tree(proc)
                     code = proc.wait()

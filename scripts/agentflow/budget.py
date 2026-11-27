@@ -9,7 +9,7 @@ from __future__ import annotations
 import hashlib
 import json
 
-from .state import Ctx, append_audit, mutex, read_json, update_json, write_json
+from .state import Ctx, append_audit, awake_elapsed, mutex, read_json, update_json, write_json
 
 CAPS: dict[str, int] = {
     "spec_rounds": 5,
@@ -22,8 +22,10 @@ CAPS: dict[str, int] = {
     "subagents": 60,
     "pi_calls": 20,
 }
+# The run's cap, counted on the AWAKE clock since TLS-122 (`elapsed`): a host
+# suspend is not time the run had. The name is kept for its readers.
 WALL_CLOCK_SECONDS = 24 * 3600
-_DEADLINE_MSG = f"{WALL_CLOCK_SECONDS // 3600} h wall-clock cap reached"
+_DEADLINE_MSG = f"{WALL_CLOCK_SECONDS // 3600} h cap reached (awake time)"
 
 
 class BudgetExceeded(RuntimeError):
@@ -40,25 +42,32 @@ def _path(ctx: Ctx, run_id: str | None = None):
     return (ctx.paths.run_dir(run_id) if run_id else ctx.run_dir) / "budget.json"
 
 
-def _checksum(counts: dict, claimed_at: float, grants: dict | None = None) -> str:
+def _checksum(counts: dict, claimed_at: float, grants: dict | None = None,
+              claimed_awake: list | None = None) -> str:
     payload = {"counts": counts, "claimed_at": claimed_at}
     if grants:  # absent from every budget written before `grant` existed, so theirs still match
         payload["grants"] = grants
+    if claimed_awake:  # likewise before TLS-122; covered, or an edit would extend the cap
+        payload["claimed_awake"] = claimed_awake
     raw = json.dumps(payload, sort_keys=True)
     return hashlib.sha256(raw.encode()).hexdigest()[:16]
+
+
+def _sum(data: dict) -> str:
+    return _checksum(data["counts"], data["claimed_at"], data.get("grants"), data.get("claimed_awake"))
 
 
 def _load(ctx: Ctx, run_id: str | None = None) -> dict:
     data = read_json(_path(ctx, run_id))
     if not data:
         raise RuntimeError("budget not initialised for this run")
-    if data.get("checksum") != _checksum(data["counts"], data["claimed_at"], data.get("grants")):
+    if data.get("checksum") != _sum(data):
         raise RuntimeError("budget.json does not match executor history")
     return data
 
 
 def _save(ctx: Ctx, data: dict, run_id: str | None = None) -> None:
-    data["checksum"] = _checksum(data["counts"], data["claimed_at"], data.get("grants"))
+    data["checksum"] = _sum(data)
     write_json(ctx, _path(ctx, run_id), data)
 
 
@@ -68,12 +77,26 @@ def _cap(data: dict, key: str) -> int:
 
 
 def init(ctx: Ctx, claimed_at: float) -> None:
-    _save(ctx, {"counts": {}, "claimed_at": claimed_at})
+    """`claimed_awake` is the awake clock NOW (both callers init at the claim),
+    in budget.json itself, covered by its checksum: one write records the claim
+    on both clocks (TLS-122 sol r6). The executor before TLS-122 refuses this
+    budget (its checksum leaves the key out): one more reason for the drain."""
+    data = {"counts": {}, "claimed_at": claimed_at}
+    if aw := ctx.awake_now():
+        data["claimed_awake"] = list(aw)
+    _save(ctx, data)
+
+
+def elapsed(ctx: Ctx, data: dict) -> tuple[float, str]:
+    """The run's seconds so far and the clock they are on: `awake` (the host's
+    suspends left out) or `wall` (a budget from before TLS-122, another boot or
+    time namespace, an unusable stamp, or no awake clock; suspends counted, as
+    before)."""
+    return awake_elapsed(data.get("claimed_awake"), ctx.awake_now(), ctx.now() - data["claimed_at"])
 
 
 def check_deadline(ctx: Ctx) -> None:
-    data = _load(ctx)
-    if ctx.now() - data["claimed_at"] > WALL_CLOCK_SECONDS:
+    if elapsed(ctx, _load(ctx))[0] > WALL_CLOCK_SECONDS:
         raise DeadlineExceeded(_DEADLINE_MSG)
 
 
@@ -83,7 +106,7 @@ def charge(ctx: Ctx, key: str, n: int = 1, sub: str | None = None) -> int:
     # Mutex: an operator's `grant` writes the same file; neither may lose the other's write.
     with mutex(ctx, f"budget-{ctx.run_id}"):
         data = _load(ctx)
-        if ctx.now() - data["claimed_at"] > WALL_CLOCK_SECONDS:
+        if elapsed(ctx, data)[0] > WALL_CLOCK_SECONDS:
             raise DeadlineExceeded(_DEADLINE_MSG)
         slot = f"{key}:{sub}" if sub else key
         used = data["counts"].get(slot, 0) + n
@@ -121,8 +144,9 @@ def grant(ctx: Ctx, run_id: str, key: str, n: int, by: str, issue: int) -> int:
 
 def snapshot(ctx: Ctx) -> dict:
     data = _load(ctx)
+    secs, clock = elapsed(ctx, data)
     return {"counts": data["counts"], "claimed_at": data["claimed_at"], "caps": CAPS,
-            "grants": data.get("grants", {})}
+            "grants": data.get("grants", {}), "elapsed_s": round(secs), "elapsed_clock": clock}
 
 
 # `loop.json` is shared by every session, so its read-modify-write holds mutex

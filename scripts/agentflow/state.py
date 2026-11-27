@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import math
 import os
 import time
 import uuid
@@ -153,6 +154,15 @@ class Ctx:
     dry_run: bool = False
     run_id: str | None = None
     now: Callable[[], float] = field(default=time.time)
+    # The awake clock (TLS-122): `(boot id, seconds)` or None. None here means
+    # `host_awake` with the real wall clock, and no awake clock with a stubbed one.
+    awake: Callable[[], "tuple[str, float] | None"] | None = None
+
+    def awake_now(self) -> "tuple[str, float] | None":
+        if self.awake is not None:
+            return self.awake()
+        # A test that stubs only `now` steers time by the wall clock alone.
+        return host_awake() if self.now is time.time else None
 
     def write_guard(self, what: str) -> None:
         if self.dry_run:
@@ -163,6 +173,74 @@ class Ctx:
         if not self.run_id:
             raise RuntimeError("no run_id in context")
         return self.paths.run_dir(self.run_id)
+
+
+BOOT_ID = Path("/proc/sys/kernel/random/boot_id")
+TIMENS_OFFSETS = Path("/proc/self/timens_offsets")
+
+
+def host_awake() -> tuple[str, float] | None:
+    """`(clock id, CLOCK_MONOTONIC seconds)`, or None where they cannot be read
+    (not Linux). CLOCK_MONOTONIC stops while the host is suspended (server1 is
+    a laptop that suspends when moved: TLS-104), so two readings with the same
+    clock id differ by the time the host was awake between them.
+
+    The clock id is the boot id plus this process's time-namespace offset for
+    CLOCK_MONOTONIC: another boot restarts the clock, and a time namespace
+    (Linux 5.6+) shifts it by its offset (sol r1). Readings with different ids
+    are never compared; the caller falls back to the wall clock. No offsets
+    file (a kernel without time namespaces) means offset 0."""
+    try:
+        boot = BOOT_ID.read_text(encoding="utf-8").strip()
+        if not boot:
+            return None
+        try:
+            offsets = TIMENS_OFFSETS.read_text(encoding="utf-8")
+        except FileNotFoundError:
+            offsets = ""
+        mono = next((ln.split()[1:] for ln in offsets.splitlines() if ln.split()[:1] == ["monotonic"]),
+                    ["0", "0"])
+        return f"{boot}/{'.'.join(mono)}", time.clock_gettime(time.CLOCK_MONOTONIC)
+    except (OSError, ValueError, AttributeError):
+        return None
+
+
+# A stored reading may be at most this far AHEAD of the reader's clock: some
+# readers take their clock reading before they load the lease, and a beat in
+# between stamps a later reading. Further ahead is not a real reading.
+AHEAD_TOLERANCE_S = 60.0
+
+
+def awake_elapsed(then, now_awake, wall_elapsed: float) -> tuple[float, str]:
+    """`(seconds, clock)` from the stored reading `then` to `now_awake`: on the
+    awake clock (`"awake"`), else `wall_elapsed` (`"wall"`).
+
+    The awake clock counts only for a usable reading of the same clock id: a
+    `[str, number]` that is finite, not negative, and not ahead of the reader's
+    own clock by more than AHEAD_TOLERANCE_S. A reading from another boot or
+    time namespace, malformed or unusable (NaN, 1e20, a 400-digit integer), or
+    a writer or reader with no awake clock: wall.
+
+    The wall age is NOT an upper bound (sol r2): a backward wall step would
+    then shorten a valid awake age. The reading sits in the same file as the
+    heartbeat it was taken with (the lease, budget.json), so it is exactly as
+    trustworthy as that heartbeat: a hand edit could move either."""
+    try:
+        if not (is_stamp(then) and now_awake and then[0] == now_awake[0]):
+            return wall_elapsed, "wall"
+        s = float(then[1])                       # OverflowError for a huge integer
+        if not (math.isfinite(s) and 0 <= s <= now_awake[1] + AHEAD_TOLERANCE_S):
+            return wall_elapsed, "wall"
+        age = now_awake[1] - s
+    except OverflowError:
+        return wall_elapsed, "wall"
+    return max(age, 0.0), "awake"
+
+
+def is_stamp(r: Any) -> bool:
+    """The SHAPE of an awake reading, `[str, number]` (booleans refused)."""
+    return (isinstance(r, (list, tuple)) and len(r) == 2 and isinstance(r[0], str)
+            and isinstance(r[1], (int, float)) and not isinstance(r[1], bool))
 
 
 def new_run_id(now: float) -> str:
