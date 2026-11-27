@@ -99,12 +99,28 @@ scripts/cdo-slot acquire|release|status|run <owner> <reason>  # The one CDO slot
                                # `ci-steps all` failed its wall-time bounds beside a lane's builds); any other
                                # timed run of yours passes it too. A timed acquire first
                                # waits for the build processes already running (cargo, cargo-nextest, rustc,
-                               # rustdoc by exact name; ci-steps and check-goldens by argv; never a
+                               # rustdoc by exact name; ci-steps and check-goldens by argv and by the
+                               # record `cdo-slot enter` keeps of each live entry; never a
                                # self-matching `pgrep -f`) until none is seen for CDO_SLOT_TIMED_GRACE_S (3 s)
                                # in a row, up to CDO_SLOT_TIMED_WAIT_S (1800 s), then refuses (exit 6) rather
-                               # than start beside one. The hook sees a command only as it starts: `sleep 60;
-                               # cargo build` allowed before a timing began still builds (TLS-98 plans a cargo
-                               # wrapper lock for that). Only kernel locks decide (TLS-89): the hold is a flock
+                               # than start beside one. The hook sees a command only as it starts, so ci-steps
+                               # and check-goldens also check at their OWN start (TLS-135, scripts/build-entry):
+                               # one queued behind a lock before a timing, or started where no hook is wired,
+                               # waits for a timing that is not its own line's ("waiting for the CDO timing to
+                               # end"), up to CDO_SLOT_ENTRY_WAIT_S (3600 s) of awake time in all, then refuses
+                               # (exit 1; a check that fails refuses too). Every step of a run checks for
+                               # itself; the run is quiet while a step runs (`cdo-slot quiet`), and after the
+                               # step it is admitted afresh, so under a timing that began mid-run it waits there
+                               # (a refusal ends the whole run). One timing per slot at a time: a timed start is
+                               # refused at once (exit 6) while an unrelated timing runs (`timing-gate.lock`). A
+                               # process holds a timing when a descriptor of it carries the timing's flock
+                               # (inherited or dup'd; /proc fdinfo), or it is the exact --bind process. A holder
+                               # asking again gets "already timed" (exit 4) once the timing is final (committed),
+                               # "still starting" (6) before; a child of a holder that holds nothing gets 6. So a
+                               # hand `acquire --bind <pid> --timed` followed by cdo-speed (or perf-bounds) started
+                               # from a child of <pid> is refused: time the child itself, or use `run --timed --`.
+                               # A bare `sleep 60; cargo build` allowed before a
+                               # timing still builds (TLS-98's cargo wrapper is for that). Only kernel locks decide (TLS-89): the hold is a flock
                                # its holder keeps (`run`: the run and its command, killed or not; `acquire`: a
                                # keeper that ends with the --bind PID or the Claude PID), a timing a shared
                                # flock; a dead process drops its locks, so nothing is STALE any more, and
