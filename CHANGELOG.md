@@ -178,6 +178,44 @@ suite's load. Each failure was a test defect: an assumption about how long a ste
 - **Filed.** ENG-230 (the snapshot writes a colliding tableextension stub's rows under the real
   table's stable ids).
 
+### Fixed (TLS-160: tests never reach the real CDO slot; status says when a timing is still starting)
+
+- **What was seen.** On 2026-11-27 a timed hold looked as if it started beside a running test suite:
+  `cdo-slot status` said "timed by before-after since 17:37:55" while the suite ran. The drain was
+  right: the timing's commit mark (`commit/<id>`) was written at 17:45:16, 3 s (the grace) after the
+  last build record went at 17:45:13, when the suite was killed. "since" is the time the timing was
+  TAKEN, before its drain; status showed a draining timing exactly like a running one.
+- **Status.** A timing before its commit point (still waiting for the builds already running) now
+  reads `timed by X since T (reason); starting: it waits for running builds to end before it
+  times`. A record with no commit id (an older cdo-slot) reads as before. The guard waits for this
+  line and ALLOWS when it times out (30 s), so the commit mark is read only when it is a regular
+  file, and within 2 s (`timeout -k 1 2 cat`; sol r1, r2: a FIFO, a file swapped in after the
+  check, or a slow read). A mark not read in time adds nothing to the line.
+  `cdo_slot_status_says_a_draining_timing_is_starting` pins it, after the drain has named the
+  build it waits for, and checks that the guard still refuses a build beside the timing while the
+  mark read is stalled 60 s (a test hook, `CDO_SLOT_TEST_MARK_STALL_S`).
+- **Tests and the real slot.** `clean_env` (every test's way to start a script) clears the
+  environment, so a test that forgot its own `CDO_SLOT_DIR` ran its script against cdo-slot's
+  default, the tentacle's real slot `/work/.al-sem/cdo-slot`. `clean_env` now sets `CDO_SLOT_DIR`
+  to the test process's own throwaway folder: made once, atomically, with an unpredictable name,
+  mode 0700 and an absolute path (sol r1: a predictable path could be taken over, or a link left
+  there could lead to the real slot), and removed at the process's exit. It also sets
+  `CDO_SLOT_MEM_MIN_GB=0` (Fable r1: on a ~7 GB CI runner these tests once found no slot at all;
+  now they get one, and the 35 GB floor would block them; the memory tests set their own). A
+  test's own settings, made after it, still win.
+  `a_script_without_its_own_slot_never_reaches_the_real_one` checks the folder as cdo-slot resolves
+  it (`realpath -m`), its mode, and the floor.
+- **Proofs** (2026-11-28): the `CDO_SLOT_DIR` line dropped from `clean_env` -> the script resolves
+  "/work/.al-sem/cdo-slot" (red); restored, green. The `starting` suffix never added in
+  `timed_describe` -> "a draining timing" lacks it (red); restored, green. The mark read's
+  `timeout` dropped -> the guard's probe "timed out after 30 seconds (allowed)" (red, 35 s); the
+  regular-file check and the `timeout` both dropped -> "status blocked on a FIFO commit mark" (red,
+  124 s; either alone keeps it from blocking); each restored, green (7.1 s). The throwaway folder
+  must canonicalize to an absolute path, or the test process stops (sol r2: no relative fallback).
+  Seen in use the same night: `status` read "timed by tls163 since 23:50:21 (batch scaling);
+  starting: it waits for running builds to end before it times" for 20+ min while that timing
+  waited for another lane's test suite.
+
 ### Fixed (ENG-218: FlowField and RecordRef tables, and a table's extensions, bind as the resolver binds them, not by name across all apps)
 
 - **The bug.** ENG-194 made record variables bind a table name as the program's resolver does, seen

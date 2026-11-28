@@ -205,7 +205,7 @@ glob_quote() { sed 's/[][*?\\]/\\&/g' <<<"$1"; }
 # test-hooks: CDO_SLOT_TEST_PAUSE_ENTER_S CDO_SLOT_TEST_PAUSE_ENTER_NAME CDO_SLOT_TEST_PAUSE_RETRY_S
 # test-hooks: CDO_SLOT_TEST_PAUSE_TIMED_GATE_S CDO_SLOT_TEST_PAUSE_KEEPER_S
 # test-hooks: CDO_SLOT_TEST_KEEPER_STOP CDO_SLOT_TEST_SPAWN_STEPS CDO_SLOT_TEST_COMMIT_FAIL
-# test-hooks: CDO_SLOT_TEST_SAY_NAP
+# test-hooks: CDO_SLOT_TEST_SAY_NAP CDO_SLOT_TEST_MARK_STALL_S
 # test-hooks: CDO_SLOT_TEST_PAUSE_COMMIT_S CDO_SLOT_TEST_PAUSE_COMMITTED_S CDO_SLOT_TEST_UNREADABLE_PID
 # test-hooks: CDO_SLOT_TEST_REFUSE_HOLDER CDO_SLOT_TEST_FDINFO_UNREADABLE
 test_pause() {
@@ -509,6 +509,14 @@ timed_now() {
     done
     return 1
 }
+# mark_read <file>: its text within 2 s, or fail (TLS-160; see timed_describe).
+mark_read() {
+    if [[ -n "${CDO_SLOT_TEST_MARK_STALL_S:-}" ]]; then
+        timeout -k 1 2 bash -c 'sleep "$1"; cat "$2"' _ "$CDO_SLOT_TEST_MARK_STALL_S" "$1" 2>/dev/null
+    else
+        timeout -k 1 2 cat "$1" 2>/dev/null
+    fi
+}
 # timed_describe: the line of a running timing: the first timing file whose id
 # lock is held (one read of each file).
 timed_describe() {
@@ -517,7 +525,27 @@ timed_describe() {
         [[ -f "$f" ]] || continue
         probe s "$ids/timed.${f##*/}" || continue
         load "$f"
-        echo "timed by $(field owner) since $(field since) ($(field reason)$(suspended_since "with the host suspended since")"
+        local c m starting=""
+        c=$(field commit)
+        # ⟨TLS-160⟩ Before its commit point a timing only waits for the builds
+        # already running (its drain): say so, or "since" reads as the time it
+        # began timing (a record with no commit id, from an older cdo-slot,
+        # says nothing more). The guard waits for this whole line and ALLOWS
+        # when it times out (30 s), so the mark is read only when it is a
+        # regular file, and within 2 s (sol r1, r2: a FIFO, a file swapped in
+        # after the check, or a slow read); no mark yet is a timing still
+        # starting; a mark not read in time, or anything else, says no more.
+        # Test hook: CDO_SLOT_TEST_MARK_STALL_S stalls the read that long.
+        if [[ "$c" =~ ^[0-9a-f]{16}$ ]]; then
+            if [[ ! -e "$commit_dir/$c" && ! -L "$commit_dir/$c" ]]; then
+                starting="; starting: it waits for running builds to end before it times"
+            elif [[ -f "$commit_dir/$c" && ! -L "$commit_dir/$c" ]] \
+                && m=$(mark_read "$commit_dir/$c") \
+                && [[ "$m" != commit ]]; then
+                starting="; starting: it waits for running builds to end before it times"
+            fi
+        fi
+        echo "timed by $(field owner) since $(field since) ($(field reason)$(suspended_since "with the host suspended since")$starting"
         return
     done
     echo "timed (its timing is starting)"

@@ -7149,6 +7149,40 @@ fn scripts_see_none_of_the_callers_environment() {
     assert!(text.contains("env probe: ran"), "{text}");
 }
 
+/// ⟨TLS-160⟩ A script started through `clean_env` with no slot folder of its
+/// own never reaches the tentacle's real slot (cdo-slot's default
+/// /work/.al-sem/cdo-slot): the folder it resolves, exactly as cdo-slot does
+/// (`realpath -m "${CDO_SLOT_DIR:-/work/.al-sem/cdo-slot}"`), is this test
+/// process's private throwaway folder (a directory, mode 0700), and it runs
+/// with no memory floor.
+///
+/// Mutations (2026-11-28): the `CDO_SLOT_DIR` line dropped from `clean_env`
+/// -> the script resolves /work/.al-sem/cdo-slot (red); restored, green.
+#[cfg(target_os = "linux")]
+#[test]
+fn a_script_without_its_own_slot_never_reaches_the_real_one() {
+    use std::os::unix::fs::PermissionsExt;
+    let out = crate::clean_env::command("bash")
+        .args([
+            "-c",
+            "realpath -m \"${CDO_SLOT_DIR:-/work/.al-sem/cdo-slot}\"; printf %s \"$CDO_SLOT_MEM_MIN_GB\"",
+        ])
+        .output()
+        .unwrap();
+    let text = String::from_utf8_lossy(&out.stdout).into_owned();
+    let (resolved, floor) = text.split_once('\n').unwrap_or((&text, ""));
+    let private = crate::clean_env::throwaway_slot();
+    assert_eq!(
+        std::path::Path::new(resolved),
+        private,
+        "the slot folder a script resolves: {text:?}"
+    );
+    let meta = std::fs::metadata(&private).unwrap();
+    assert!(meta.is_dir(), "{private:?}");
+    assert_eq!(meta.permissions().mode() & 0o777, 0o700, "{private:?}");
+    assert_eq!(floor, "0", "the memory floor a script sees: {text:?}");
+}
+
 /// The child half of `scripts_see_none_of_the_callers_environment`; nothing
 /// outside it (no `TLS115_ENV_PROBE`).
 #[cfg(target_os = "linux")]
