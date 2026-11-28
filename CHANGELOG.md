@@ -7,6 +7,46 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed (TLS-163: perf-bounds' batch write check judged the host's cache, not the check)
+
+- **The failure.** `perf_bounds::batch_write_check_is_not_quadratic` timed `check_write_sets`
+  over 2,000 jobs against a 1 s bound that its doc said "cannot flake on a loaded runner". It
+  failed every landing on server1 on 2026-11-27, on master too (1.09-1.82 s at host `some`
+  avg60 about 18 %, 1.38 s and 3.93 s in landings). No branch had touched batch code.
+- **The cause.** The check is not quadratic, and most of its time is not its jobs. Timed in
+  one process (master 0ea800d43, release-fast, 5 rounds, avg60 about 8 %):
+
+  | Jobs | min | all runs |
+  |---|---|---|
+  | 1,000 | 491 ms | 637, 1009, 523, 534, 491 |
+  | 2,000 | 559 ms | 631, 574, 559, 644, 631 |
+  | 4,000 | 563 ms | 678, 563, 620, 697, 667 |
+
+  Doubling the jobs barely moved it: about 0.5 s is paid once per call.
+  `check_write_sets` first snapshots the engine's cache folders (`cache_guard::take`,
+  TLS-116), which walks every file of the user's real text cache,
+  `~/.cache/al-ch-snapshot-cache`: 200,562 files (5.4 GB) on server1. An A/B at 2,000 jobs,
+  3 rounds interleaved: the real cache 927, 1,521 and 1,037 ms; an empty cache (a fresh
+  `XDG_CACHE_HOME`) 206, 345 and 236 ms. So the test measured the host's cache, which grows,
+  and passed only while it was small.
+- **The fix (the test).** Each sample now runs in a child process of the test binary (a new
+  helper test, `batch_write_check_child`, which does nothing unless its variable is set),
+  with `XDG_CACHE_HOME` set to an empty folder in the child's environment only. The child
+  checks that the text cache really is under that folder. The test asserts the scaling,
+  not a time: 5 interleaved samples each of 2,000 and 4,000 jobs, and the minimum at 4,000
+  must be less than 3 times the minimum at 2,000. Linear is x2, the pair scan it guards
+  against is x4, whatever the host's speed or load. The 1 s bound is gone; a single sample
+  over 120 s still fails, as a hang. The doc's "cannot flake" claim is corrected.
+- **Measured and proven** (release-fast, in a timed CDO slot hold, host avg60 10-16 %): the
+  check grew x2.337 (131 ms to 306 ms) and x2.298 (280 ms to 645 ms) when its jobs doubled.
+  Discrimination proof: with the per-workspace `taken` cache removed, so every job checks
+  every write (the old pair scan), the test failed at x9.541 (1.19 s to 11.33 s); restored, it
+  passed.
+- **Not fixed here.** Every `alsem batch` run pays the cache walk (about 0.5-1.2 s on
+  server1, growing), and many tests reach the user's real cache folders without isolating
+  them. Both are written up for a follow-up card in
+  `/work/.al-sem/tools-notes/TLS-163-followup-batch-cache-walk.md`.
+
 ### Fixed (ENG-218: FlowField and RecordRef tables, and a table's extensions, bind as the resolver binds them, not by name across all apps)
 
 - **The bug.** ENG-194 made record variables bind a table name as the program's resolver does, seen

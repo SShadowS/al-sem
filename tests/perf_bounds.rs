@@ -1428,8 +1428,18 @@ mod release_checks {
         );
     }
 
-    /// Jobs in [`batch_write_check_is_not_quadratic`]'s manifest.
+    /// Jobs in [`batch_write_check_is_not_quadratic`]'s smaller manifest; the
+    /// larger has twice as many.
     const WRITE_CHECK_JOBS: usize = 2000;
+    /// Samples of each size; the minimum of each set is judged ([`min_of`]).
+    const WRITE_CHECK_SAMPLES: usize = 5;
+    /// The most the check's time may grow when its jobs double. Linear is
+    /// x2; the pair scan it guards against is x4.
+    const WRITE_CHECK_SCALING_FACTOR: f64 = 3.0;
+    /// A hang guard only, not a speed bound: no one sample may take this long.
+    const WRITE_CHECK_HANG: Duration = Duration::from_secs(120);
+    /// Set in [`batch_write_check_child`]'s environment: its job count.
+    const WRITE_CHECK_CHILD_ENV: &str = "PERF_BOUNDS_WRITE_CHECK_JOBS";
 
     /// G14: `alsem batch`'s write-set check (`check_write_sets`) runs before any
     /// build. It asked, for every job and every other job's write, whether the
@@ -1438,20 +1448,111 @@ mod release_checks {
     /// calls. 800 `query effects` jobs on Continia DO spent ~25 s in it, 5,488
     /// over ten minutes. Each distinct workspace is now resolved once.
     ///
-    /// Not a 3x-of-baseline bound like the rows above: the old code is
-    /// orders of magnitude slower here (2,000 jobs is 8 million pairs), so a
-    /// bound of 1 s cannot flake on a loaded runner and still fails any return
-    /// to the pair scan.
+    /// TLS-163: this asserts the SCALING, not a time. It was a 1 s bound,
+    /// said to be one that "cannot flake on a loaded runner"; it failed on
+    /// master on server1 at moderate load (1.09-1.82 s). Most of that time was
+    /// not the check's jobs at all: `check_write_sets` first snapshots the
+    /// engine's cache folders (`cache_guard::take`, TLS-116), which walks every
+    /// file of the user's real text cache, 200,562 files on server1, ~0.5 s, the
+    /// same at 1,000, 2,000 or 4,000 jobs. So the time depended on the host's
+    /// cache, which grows. Now each sample runs in a child process of this
+    /// binary ([`batch_write_check_child`]) whose `XDG_CACHE_HOME` is an empty
+    /// folder (an environment change in the child only), and the test asserts
+    /// that doubling the jobs (2,000 to 4,000) multiplies the minimum time by
+    /// less than [`WRITE_CHECK_SCALING_FACTOR`]. Linear is x2, the pair scan x4,
+    /// whatever the host's speed or load. A sample over [`WRITE_CHECK_HANG`]
+    /// still fails, as a hang.
+    ///
+    /// Measured 2026-11-28 (release-fast, timed CDO slot hold, host avg60
+    /// 10-16 %): this code x2.337 (131 ms to 306 ms) and x2.298 (280 ms to
+    /// 645 ms). Proof: the per-workspace `taken` cache in `check_identities`
+    /// removed, so every job checks every write (the pair scan) -> FAILED,
+    /// x9.541 (1.19 s to 11.33 s); restored -> passed.
     #[test]
     fn batch_write_check_is_not_quadratic() {
         let _serial = serial();
+        let cache = TempDir::new().expect("an empty cache folder");
+        let exe = std::env::current_exe().expect("this test binary");
+        let sample = |jobs: usize| -> Duration {
+            let out = std::process::Command::new(&exe)
+                .args([
+                    "release_checks::batch_write_check_child",
+                    "--exact",
+                    "--nocapture",
+                    "--test-threads=1",
+                ])
+                .env(WRITE_CHECK_CHILD_ENV, jobs.to_string())
+                .env("XDG_CACHE_HOME", cache.path())
+                .env_remove("ALSEM_IR_CACHE_DIR")
+                .output()
+                .expect("run the child");
+            let text = format!(
+                "{}{}",
+                String::from_utf8_lossy(&out.stdout),
+                String::from_utf8_lossy(&out.stderr)
+            );
+            assert!(out.status.success(), "the child failed: {text}");
+            // Anywhere in a line: libtest prints `test <name> ... ` first, on the
+            // same line as the child's own output.
+            let ns: u64 = text
+                .lines()
+                .find_map(|l| l.split_once("[perf_bounds] write-check child took_ns="))
+                .and_then(|(_, rest)| rest.split_whitespace().next())
+                .unwrap_or_else(|| panic!("the child gave no time: {text}"))
+                .parse()
+                .expect("the child's time");
+            let took = Duration::from_nanos(ns);
+            assert!(
+                took < WRITE_CHECK_HANG,
+                "check_write_sets over {jobs} jobs took {took:?}: a hang?"
+            );
+            took
+        };
+        // Interleaved, so a load window covers both sizes alike.
+        let (mut small, mut big) = (Vec::new(), Vec::new());
+        for _ in 0..WRITE_CHECK_SAMPLES {
+            small.push(sample(WRITE_CHECK_JOBS));
+            big.push(sample(2 * WRITE_CHECK_JOBS));
+        }
+        let (msmall, mbig) = (min_of(&small), min_of(&big));
+        let ratio = mbig.as_secs_f64() / msmall.as_secs_f64();
+        println!(
+            "[perf_bounds] batch_write_check scaling: t({WRITE_CHECK_JOBS})={msmall:?} \
+             t({})={mbig:?} ratio={ratio:.3} samples_small={small:?} samples_big={big:?}",
+            2 * WRITE_CHECK_JOBS
+        );
+        assert!(
+            ratio < WRITE_CHECK_SCALING_FACTOR,
+            "check_write_sets' time grew x{ratio:.3} when its jobs doubled ({msmall:?} to {mbig:?}); \
+             x{WRITE_CHECK_SCALING_FACTOR} or more is the pair scan's signature (x4)"
+        );
+    }
+
+    /// One sample of [`batch_write_check_is_not_quadratic`], run in its child
+    /// process: with [`WRITE_CHECK_CHILD_ENV`] set, time `check_write_sets`
+    /// over that many jobs and print the time; without it (any other run of
+    /// this binary) do nothing.
+    #[test]
+    fn batch_write_check_child() {
+        let _serial = serial();
+        let Ok(jobs) = std::env::var(WRITE_CHECK_CHILD_ENV) else {
+            return;
+        };
+        let jobs: usize = jobs.parse().expect("a job count");
         use al_sem::engine::batch::manifest::{JobPaths, Target, check_write_sets};
+        // The isolation the parent set up: the cache folder is under the empty
+        // XDG_CACHE_HOME, not the user's.
+        let xdg = std::env::var_os("XDG_CACHE_HOME").expect("the parent sets XDG_CACHE_HOME");
+        assert!(
+            al_sem::snapshot::cache::cache_dir_path().starts_with(&xdg),
+            "precondition: the text cache is the empty one, not the user's"
+        );
         let ws = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/analyze-json");
         assert!(ws.join("app.json").is_file(), "precondition: a workspace");
         let out = TempDir::new().expect("out dir");
         // The shape of the peer's manifest: every job reads the one workspace
         // and writes its own stdout and stderr outside it.
-        let jobs: Vec<(String, JobPaths)> = (0..WRITE_CHECK_JOBS)
+        let jobs: Vec<(String, JobPaths)> = (0..jobs)
             .map(|i| {
                 let paths = JobPaths {
                     writes: vec![
@@ -1470,10 +1571,9 @@ mod release_checks {
         let checked = check_write_sets(&jobs, &cwd);
         let took = start.elapsed();
         assert_eq!(checked, Ok(()), "precondition: no clash in this manifest");
-        println!("[perf_bounds] batch_write_check({WRITE_CHECK_JOBS} jobs): {took:?}");
-        assert!(
-            took < Duration::from_secs(1),
-            "check_write_sets over {WRITE_CHECK_JOBS} jobs took {took:?}: is the pair scan back?"
+        println!(
+            "[perf_bounds] write-check child took_ns={}",
+            took.as_nanos()
         );
     }
 }
