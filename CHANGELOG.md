@@ -187,16 +187,26 @@ suite's load. Each failure was a test defect: an assumption about how long a ste
   TAKEN, before its drain; status showed a draining timing exactly like a running one.
 - **Status.** A timing before its commit point (still waiting for the builds already running) now
   reads `timed by X since T (reason); starting: it waits for running builds to end before it
-  times`. A record with no commit id (an older cdo-slot) reads as before.
-  `cdo_slot_status_says_a_draining_timing_is_starting` pins it.
+  times`. A record with no commit id (an older cdo-slot) reads as before. The guard waits for this
+  line, so the commit mark is read only when it is a regular file (sol r1: a FIFO there would block
+  the read, the guard would time out and allow work beside a live timing).
+  `cdo_slot_status_says_a_draining_timing_is_starting` pins both, after the drain has named the
+  build it waits for.
 - **Tests and the real slot.** `clean_env` (every test's way to start a script) clears the
   environment, so a test that forgot its own `CDO_SLOT_DIR` ran its script against cdo-slot's
   default, the tentacle's real slot `/work/.al-sem/cdo-slot`. `clean_env` now sets `CDO_SLOT_DIR`
-  to the test process's throwaway folder (`$TMPDIR/alsem-test-slot.<pid>`); a test's own setting,
-  made after it, still wins. `a_script_without_its_own_slot_never_reaches_the_real_one` pins it.
-- **Proofs** (2026-11-28): the `CDO_SLOT_DIR` line dropped from `clean_env` -> "the slot folder
-  a script sees: \"\"" (red); restored, green (0.05 s). The `starting` suffix never added in
-  `timed_describe` -> "never: the drain shows in status" (red, 60 s); restored, green (11.4 s).
+  to the test process's own throwaway folder: made once, atomically, with an unpredictable name,
+  mode 0700 and an absolute path (sol r1: a predictable path could be taken over, or a link left
+  there could lead to the real slot), and removed at the process's exit. It also sets
+  `CDO_SLOT_MEM_MIN_GB=0` (Fable r1: on a ~7 GB CI runner these tests once found no slot at all;
+  now they get one, and the 35 GB floor would block them; the memory tests set their own). A
+  test's own settings, made after it, still win.
+  `a_script_without_its_own_slot_never_reaches_the_real_one` checks the folder as cdo-slot resolves
+  it (`realpath -m`), its mode, and the floor.
+- **Proofs** (2026-11-28): the `CDO_SLOT_DIR` line dropped from `clean_env` -> the script resolves
+  "/work/.al-sem/cdo-slot" (red); restored, green. The `starting` suffix never added in
+  `timed_describe` -> "a draining timing" lacks it (red); restored, green. The regular-file check
+  dropped -> "status blocked on a FIFO commit mark" (red, 122 s); restored, green (4.8 s).
   Seen in use the same night: `status` read "timed by tls163 since 23:50:21 (batch scaling);
   starting: it waits for running builds to end before it times" for 20+ min while that timing
   waited for another lane's test suite.

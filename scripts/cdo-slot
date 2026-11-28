@@ -522,9 +522,17 @@ timed_describe() {
         # ⟨TLS-160⟩ Before its commit point a timing only waits for the builds
         # already running (its drain): say so, or "since" reads as the time it
         # began timing (a record with no commit id, from an older cdo-slot,
-        # says nothing more).
-        [[ ! "$c" =~ ^[0-9a-f]{16}$ ]] || commit_final "$c" \
-            || starting="; starting: it waits for running builds to end before it times"
+        # says nothing more). The guard waits for this line, so the mark is
+        # read only when it is a regular file (a FIFO there would block the
+        # read and time the guard out: it then allows; sol r1); no mark yet
+        # is a timing still starting, anything else says nothing more.
+        if [[ "$c" =~ ^[0-9a-f]{16}$ ]]; then
+            if [[ ! -e "$commit_dir/$c" && ! -L "$commit_dir/$c" ]]; then
+                starting="; starting: it waits for running builds to end before it times"
+            elif [[ -f "$commit_dir/$c" && ! -L "$commit_dir/$c" ]] && ! commit_final "$c"; then
+                starting="; starting: it waits for running builds to end before it times"
+            fi
+        fi
         echo "timed by $(field owner) since $(field since) ($(field reason)$(suspended_since "with the host suspended since")$starting"
         return
     done
