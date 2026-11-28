@@ -1385,6 +1385,107 @@ ran beside the timing).
 - Still open: a bare `cargo` started by a command queued before a timing is not checked; that
   is TLS-98's cargo wrapper.
 
+### Added (ENG-165: `prove … commit-between --after A --before B`)
+
+A new prove question: can a COMMIT that ends the caller's transaction run after site A
+returns and before the next run of site B? It came from an investigation of mail and
+eDocument bookkeeping, where a send (A), then a commit, then an error before the log `Insert`
+(B) loses the log entry while the send stays. Design:
+`docs/superpowers/specs/2026-11-25-eng165-commit-between-design.md` (revision 3.1, reviewed
+by Fable).
+- **The question.** `alsem prove <ws> <routine> commit-between --after FILE:LINE[:COL]
+  --before FILE:LINE[:COL]` (MCP `alsem_prove`: `after`, `before`). A site is a call or a
+  record operation, in the workspace or a dependency's source; a line with two sites needs
+  the column, and a file tail that names two files is refused with the candidates.
+- **Between** is read off each routine's control-flow graph (`commit_between::Cfg`): A's tail
+  (below the meet routine of the routes to A and B), the meet routine's middle and B's head,
+  for every route pair from the root's state graph. Branches, loops (the next B after A; a B
+  that may be skipped is no cut), `exit`, `break`, `Error`, calls in arguments (left to right,
+  measured) and the cones of calls, events and record triggers count.
+- **Classes.** Only a class-1 commit (a `Commit()` that runs normally, also inside an isolated
+  subscriber) decides `yes`. A checked run's commit, and any commit behind a checked-run edge,
+  commits only the run's own transaction (`ownTransactionCommits`), except when A itself runs
+  inside that run: then its commit is what makes A durable (`run-commit-of-A`).
+- **Lists kept beside the verdict:** `errorsAfterCommit` per commit (the dangerous case, first
+  in the human answer), `commitsInsideA` / `commitsInsideB` (commits during a call A or B: name
+  a deeper site to order them), `commitsWithoutB` (commits on paths that end by `exit`, a
+  return or an error before B), `errorsBetween`, `ownTransactionCommits`. Traps are scoped to
+  the region: an error a trap below the region catches is left out; one a trap above the meet
+  routine catches is kept, `swallowed-above-meet`.
+- **Unknown, not no:** an unresolved call or an open interface call (waived by
+  `--closed-world`) in a region cone, a reached routine whose body is not available (symbols
+  only), a truncated cone or analysis gaps, a routine without a control-flow tree, a site its
+  tree does not place (a call in a `case` label: `site-outside-control-flow`), a route cap.
+- **Review round 1 (Fable) fixes:** a commit in A's tail (or a checked run on A's route) on a
+  path where B never runs is `commitsWithoutB`, not between; a commit in B's head below a checked
+  run is class 2; `[CommitBehavior]` is read per route; a ternary arm may be skipped; only region
+  cones block (an unresolved call inside A does not); A or B in an event subscriber is walked
+  through its publisher; a page run after a direct `Commit()` on every path is no error row.
+- **Output:** the nearest witness per list (cone hops, part, statement, workspace first), counts
+  per class split workspace/dependency, commits grouped by the statement between A and B,
+  error counts by kind with the first workspace errors, conditional facts once; `--detail`
+  expands every group. JSON lists each error once (`errors`), lists hold indices, and each
+  commit carries `errorsAfterCommit {count, workspace, dependency, nearest, sameCone}`.
+- Runtime facts recorded in `docs/engine-limits.md` §5 (BC 28 Linux, Windows confirmation
+  pending).
+- **Review round 2 (Fable) fixes:** `[CommitBehavior]` is carried down every path of a region
+  cone (a commit reached both under `Ignore` and normally is kept); a route that leaves a
+  publisher by its event blocks when the event has other subscribers (`sibling-subscribers`); a
+  loop above the meet routine blocks (`loop-above-meet`); an unplaced unresolved call (e.g. in a
+  `case` label) is read against the root's unresolved cone; a guarded search stopped at its cap
+  is `unknown` (`route-graph-stopped`), not a usage error. JSON: `errorsAfterCommit` gives counts
+  and the nearest error, not every id.
+- **Review rounds 3 to 6 (Fable, sol) fixes:** recursion through any routine on A's or B's route
+  blocks (`recursion-on-route`; no route shows it, since the route search never repeats a
+  state); a statement a route leaves by blocks when other triggers, table event subscribers or
+  lifecycle triggers of a run on an object variable (`Rep.Run()`) run at the same site
+  (`site-other-edges`); a route step that may run its target more than once, anywhere on A's
+  route (the shared prefix included) or on B's route below the meet routine, blocks: a bulk
+  `ModifyAll`/`DeleteAll` trigger or table event, once per row (`bulk-operation-on-route`); a run
+  into a trigger the graph marks `Maybe`, such as a report dataitem's `OnAfterGetRecord`, or into
+  a page trigger other than `OnInit`/`OnOpenPage`/`OnClosePage`, such as an `OnQueryClosePage`
+  that returns false (`repeated-trigger-on-route`); any step into a subscriber that may be
+  bound manually, as several instances, for an event or a table event alike
+  (`repeated-subscriber-on-route`); a prefix routine with no
+  model row blocks `loop-above-meet`; every blocker that applies is listed; a route search that
+  found nothing because it stopped at its budget says `relation: route-search-capped`, not "dead
+  under literals"; `commitsInsideB` starts under B's route's `[CommitBehavior]`. The design
+  lists every edge kind with the check that covers it (§4.1).
+- **A sure B needs a sure edge (can turn a `no` into a `yes`):** the search for the next B stops
+  at a B only when every step toward it must run its one target: a direct call, or a typed call,
+  trigger or object run the graph does not mark `Maybe`, alone at its site. A table event (its
+  subscription may be skipped), an interface call (one implementer runs), a trigger of a bulk
+  operation that may match no row, or a non-literal RunTrigger is no sure B any more. A pass
+  that skips B then lets a later commit count as between: fixtures S46, S48, S52 and S53
+  answer `yes` where the engine said `no`.
+- **CDO count** (a seeded sample of 120 of the 216 routines where a call is followed by a record
+  `Insert`/`Modify`, A the call, B the write; one resident `alsem mcp`): 94 `no`, 8 `yes`,
+  15 `unknown` (8 an ambiguous routine name, 6 an open-world interface call in the region,
+  1 `recursion-on-route`), 3 refused (one site the root does not reach, two lines holding two
+  sites). Over rounds 3 to 6 the blockers turned 1 answer from `no` into `unknown`
+  (`recursion-on-route`, round 3); `loop-above-meet`, `site-other-edges`,
+  `bulk-operation-on-route`, `repeated-trigger-on-route` and `repeated-subscriber-on-route`
+  turned none. The sure-B change turned no `no` into a `yes`. Rounds 5 and 6 moved no answer and
+  no blocker in the sample: no pair met the new blockers, and no pair's answer depended on a
+  cut the sure-B change removes.
+- **What a path that ends before B leaves out (for cost):** a statement on such a path is read
+  for its own records only. `commitsWithoutB` then misses a commit in a callee on such a path,
+  and an error raised inside such a callee is in neither `errorsBetween` nor any commit's
+  `errorsAfterCommit`. The verdict and the blockers do not change (design §5.3).
+- **Measured on BC 28 on Linux (Windows confirmation pending)**, probe app and results in
+  `/work/.al-sem/engine-notes/eng165/bcprobe/`: `Page.RunModal` with a write pending raises an
+  error (without a test handler; listed as a possible error row, never a commit);
+  `Report.RunModal` of a processing-only report neither commits nor errors; a `Commit()` in an
+  isolated subscriber commits the caller's pending write; an isolated event with nothing
+  pending commits its subscribers' own writes.
+- **DO.** On the DO workspace the engine finds two places that match the owner's description
+  (engine findings, not confirmed by the owner); public fixture twins of both pin the answers
+  (`tests/cli/cli_eng165_commit_between.rs`, `do1_*`, `do2_*`). On CDO no `analyze` finding or
+  fingerprint moves (`cdo-before-after`): the question adds output only.
+- Open items are filed: an error after B before B's commit (ENG-206), and the ENG-165
+  leftovers card (`--routes`, per-route literal check, an isolated event's own commit, Windows
+  confirmation, `case` labels in the control-flow tree).
+
 ### Fixed (ENG-178: table procedures named like record built-ins: four follow-ups from ENG-173)
 
 From Fable's second review of ENG-173 (`/work/.al-sem/engine-notes/eng173/fable-eng173-r2.md`).
