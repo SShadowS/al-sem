@@ -38,6 +38,11 @@ path = "junit.xml"
 filter = 'binary(cli) & test(=cli_fingerprint_routine_cross_app::no_dependency_parity_fingerprint_routine)'
 priority = 70
 
+# ⟨TLS-150⟩ Its derived bounds need a 60 s wait and a 20 s spent share: ~60 s.
+[[profile.default.overrides]]
+filter = 'binary(cli) & test(=cdo_slot::cdo_slot_gate_entry_waits_one_deadline_in_all)'
+priority = 70
+
 [[profile.default.overrides]]
 filter = '''
   (package(al-syntax) & test(=lower::tests::attribute_flow_scales_linearly))
@@ -70,10 +75,29 @@ priority = 50
 # where a Mutex shares nothing. This group runs them one at a time instead.
 [test-groups]
 perf-bounds = { max-threads = 1 }
+# ⟨TLS-150⟩ The slot and gate-script tests start real cdo-slot, ci-steps and
+# cdo-gate processes whose waits and scans slow down with the host. All ~80 of a
+# module starting at once beside `ci-steps all`'s release build stretched single
+# tests from 3-20 s to 40-157 s and broke their setup (three landings lost on
+# 2026-11-27). Two cdo_slot tests at a time (one alone spanned ~17 min calm, ~37 min
+# at 52 % pressure; its drains that must outlast a test's own steps are 300 s now),
+# one gate_scripts test at a time; the two modules run side by side.
+# gate_scripts' `speed_*` tests (cdo-speed on stand-in servers, ~1,640 s in all,
+# as long alone as in the suite) stay outside: serial they alone took 27 min.
+cdo-slot = { max-threads = 2 }
+gate-scripts = { max-threads = 1 }
 
 [[profile.default.overrides]]
 filter = 'binary(perf_bounds)'
 test-group = 'perf-bounds'
+
+[[profile.default.overrides]]
+filter = 'binary(cli) & test(/^cdo_slot::/)'
+test-group = 'cdo-slot'
+
+[[profile.default.overrides]]
+filter = 'binary(cli) & test(/^gate_scripts::/) & !test(/^gate_scripts::speed_/)'
+test-group = 'gate-scripts'
 
 # A golden gate reports every stale family in one pass (scripts/check-goldens).
 [profile.goldens]
