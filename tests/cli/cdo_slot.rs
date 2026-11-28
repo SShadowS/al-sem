@@ -6611,6 +6611,121 @@ fn cdo_slot_a_refused_timing_keeps_its_record_while_held() {
     until("the timing ends", &|| s.probe().ends_with("timed=0"));
 }
 
+/// ⟨TLS-160⟩ While a timing drains (waits for the builds already running,
+/// before its commit point), `status` says it is starting: its "since" is the
+/// take, not the start of timing (TLS-160: read as a timing beside a build).
+/// Once committed, the line says no more. A commit mark that is not a regular
+/// file (a FIFO) is never read: `status` returns and says nothing more. A
+/// stalled read of a real mark is cut at 2 s: the guard still refuses a build
+/// beside the timing.
+///
+/// Mutations (2026-11-28): the `starting` suffix dropped from timed_describe
+/// -> the draining line lacks it (red); the mark read's `timeout` dropped ->
+/// the guard times out and allows (red); the regular-file check and the
+/// `timeout` both dropped -> `status` blocks on the FIFO (red: either alone
+/// keeps it from blocking); each restored, green.
+#[test]
+fn cdo_slot_status_says_a_draining_timing_is_starting() {
+    let s = Slot::new();
+    let fake_name = format!("t160d{}", std::process::id());
+    let fake = s.0.path().join(&fake_name);
+    std::os::unix::fs::symlink("/bin/bash", &fake).unwrap();
+    let build = stand_in(&s, &fake, &["-c".as_ref(), "sleep 600; true".as_ref()]);
+    let bpid = build.0.id();
+    let tm = sleeper();
+    let tpid = tm.id().to_string();
+    let log = s.0.path().join("drained.log");
+    let mut drained = Reap(
+        s.cmd(
+            "A",
+            &["acquire", "lane", "drained", "--bind", &tpid, "--timed"],
+            &[("CDO_SLOT_BUILD_NAMES", fake_name.as_str())],
+        )
+        .stdout(log_file(&log))
+        .stderr(std::fs::OpenOptions::new().append(true).open(&log).unwrap())
+        .spawn()
+        .unwrap(),
+    );
+    // A real drain first (sol, TLS-160 r1): the timing names the stand-in
+    // build it waits for, and only then is its status judged.
+    let read = || std::fs::read_to_string(&log).unwrap_or_default();
+    until("the drain waits for the stand-in build", &|| {
+        read().contains(&format!("waiting for build processes to end: PID {bpid} "))
+    });
+    let starting = "; starting: it waits for running builds to end before it times";
+    let (_, status) = s.run("B", &["status"], &[]);
+    assert!(status.contains(starting), "a draining timing: {status}");
+    // Its commit mark is read only when it is a regular file (sol r1): a FIFO
+    // there must not block `status` (the guard waits for it, times out and
+    // then allows). 120 s only guards a hang here.
+    let commit = std::fs::read_dir(s.dir().join("timings"))
+        .unwrap()
+        .flatten()
+        .find_map(|e| {
+            std::fs::read_to_string(e.path())
+                .ok()?
+                .lines()
+                .find_map(|l| l.strip_prefix("commit=").map(str::to_string))
+        })
+        .expect("the timing's commit id");
+    let mark = s.dir().join("commit").join(&commit);
+    std::fs::create_dir_all(mark.parent().unwrap()).unwrap();
+    assert!(
+        std::process::Command::new("mkfifo")
+            .arg(&mark)
+            .status()
+            .unwrap()
+            .success()
+    );
+    let mut st = Reap(
+        s.cmd("B", &["status"], &[])
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::null())
+            .spawn()
+            .unwrap(),
+    );
+    let asked = std::time::Instant::now();
+    while st.0.try_wait().unwrap().is_none() {
+        assert!(
+            asked.elapsed() < std::time::Duration::from_secs(120),
+            "status blocked on a FIFO commit mark"
+        );
+        std::thread::sleep(std::time::Duration::from_millis(100));
+    }
+    let text = piped_text(&mut st.0);
+    assert!(
+        text.contains("timed by lane since") && !text.contains(starting),
+        "{text}"
+    );
+    std::fs::remove_file(&mark).unwrap();
+    drop(build);
+    let code = drained.0.wait().unwrap().code();
+    assert_eq!(code, Some(0), "{}", read());
+    let (_, status) = s.run("B", &["status"], &[]);
+    assert!(status.contains("timed by lane since"), "{status}");
+    assert!(
+        !status.contains(starting),
+        "committed, still starting: {status}"
+    );
+    // A stalled read of the commit mark (the test hook holds it 60 s) never
+    // holds the guard past its 30 s timeout, after which it would allow: the
+    // read is bounded, and the guard still refuses a build beside the timing
+    // (sol, TLS-160 r2).
+    let input = serde_json::json!({
+        "tool_name": "Bash",
+        "session_id": "B",
+        "tool_input": { "command": "cargo build" },
+    });
+    let (code, text) = s.guard_raw_env(&input.to_string(), &[("CDO_SLOT_TEST_MARK_STALL_S", "60")]);
+    assert_eq!(
+        code,
+        Some(2),
+        "the guard beside a timing, its mark read stalled: {text}"
+    );
+    drop(tm);
+    until("free", &|| s.probe() == "held=0 own=0 timed=0");
+}
+
 /// ⟨TLS-135 review r11, sol; Fable⟩ The process to time is checked again right
 /// before the publication, under the gate (its start time from --bind's one
 /// read), and on every round of the drain: one that ended meanwhile is

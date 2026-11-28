@@ -41,13 +41,54 @@ pub fn clean_env(cmd: &mut Command) -> &mut Command {
             cmd.env(k, v);
         }
     }
-    cmd.env("LANG", "C.UTF-8")
+    // ⟨TLS-160⟩ Never the tentacle's real slot (cdo-slot's default,
+    // /work/.al-sem/cdo-slot): a test that forgets its own slot folder gets
+    // this process's private throwaway one instead, with no memory floor (a
+    // CI runner has ~7 GB; on CI such a test once found no slot at all). A
+    // test's own CDO_SLOT_DIR or CDO_SLOT_MEM_MIN_GB, set after this, wins.
+    cmd.env("CDO_SLOT_DIR", throwaway_slot())
+        .env("CDO_SLOT_MEM_MIN_GB", "0")
+        .env("LANG", "C.UTF-8")
         .env("GIT_CONFIG_GLOBAL", "/dev/null")
         .env("GIT_CONFIG_NOSYSTEM", "1")
         .env("GIT_AUTHOR_NAME", "t")
         .env("GIT_AUTHOR_EMAIL", "t@t")
         .env("GIT_COMMITTER_NAME", "t")
         .env("GIT_COMMITTER_EMAIL", "t@t")
+}
+
+/// This test process's throwaway slot folder (TLS-160, sol r1): made once per
+/// process, atomically (`tempfile`: a fresh, unpredictable name), private
+/// (mode 0700, set explicitly) and absolute, so no earlier entry or link can
+/// stand in its place;
+/// removed when the process exits (unix: `atexit`). Every test of one
+/// `cargo test` process shares it (nextest runs each test in its own).
+pub fn throwaway_slot() -> std::path::PathBuf {
+    static SLOT: std::sync::OnceLock<std::path::PathBuf> = std::sync::OnceLock::new();
+    SLOT.get_or_init(|| {
+        let mut b = tempfile::Builder::new();
+        b.prefix("alsem-test-slot.");
+        // Private: tempfile's default here was 0755 (measured).
+        #[cfg(unix)]
+        b.permissions(std::os::unix::fs::PermissionsExt::from_mode(0o700));
+        let tmp = b.tempdir().expect("make the throwaway slot folder");
+        // Absolute, or no slot at all (sol r2): never a relative fallback. Kept
+        // only once that holds, so a failure still removes it (sol r3).
+        let dir = std::fs::canonicalize(tmp.path()).expect("an absolute throwaway slot folder");
+        let _ = tmp.keep();
+        #[cfg(unix)]
+        {
+            extern "C" fn remove() {
+                if let Some(d) = SLOT.get() {
+                    let _ = std::fs::remove_dir_all(d);
+                }
+            }
+            // SAFETY: registers a plain `extern "C"` function with no state.
+            unsafe { libc::atexit(remove) };
+        }
+        dir
+    })
+    .clone()
 }
 
 /// `Command::new(program)` with [`clean_env`] applied.
