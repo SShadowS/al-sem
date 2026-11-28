@@ -4425,7 +4425,10 @@ fn cdo_slot_a_queued_entry_does_not_hold_up_the_timing_it_waits_for() {
             &gate,
             &format!("{script} perf-bounds"),
             &[],
-            &[("CI_STEPS_PERF_BOUNDS_BIN", bin_s.as_str())],
+            &[
+                ("CI_STEPS_PERF_BOUNDS_BIN", bin_s.as_str()),
+                NO_HOST_PRESSURE,
+            ],
         )
         .current_dir(env!("CARGO_MANIFEST_DIR"))
         .stdout(std::process::Stdio::null())
@@ -4470,7 +4473,10 @@ fn cdo_slot_a_queued_entry_does_not_hold_up_the_timing_it_waits_for() {
         &gate,
         &script,
         &[],
-        &[("CI_STEPS_PERF_BOUNDS_BIN", bin_s.as_str())],
+        &[
+            ("CI_STEPS_PERF_BOUNDS_BIN", bin_s.as_str()),
+            NO_HOST_PRESSURE,
+        ],
     );
     let mut nested = scrubbed(std::process::Command::new("bash"));
     nested
@@ -5182,6 +5188,7 @@ fn cdo_slot_ci_steps_all_waits_for_its_build_quietly() {
             &[
                 ("TREE_SITTER_AL_PATH", gs.as_str()),
                 ("CI_STEPS_PERF_BOUNDS_BIN", bs.as_str()),
+                NO_HOST_PRESSURE,
                 ("CARGO_TARGET_DIR", td.as_str()),
                 ("CDO_SLOT_TEST_PAUSE_ENTER_S", "60"),
                 ("CDO_SLOT_TEST_PAUSE_ENTER_NAME", "ci-steps build"),
@@ -5393,6 +5400,10 @@ fn cdo_slot_build_step_does_not_run_a_step_it_cannot_wait_for_quietly() {
     assert!(!t.join("stepped").exists(), "the step ran: {text}");
 }
 
+/// ⟨TLS-149⟩ For a real `ci-steps perf-bounds` in a slot: no host pressure to
+/// read, so it does not wait for the real host to calm (up to 600 s).
+const NO_HOST_PRESSURE: (&str, &str) = ("CDO_SPEED_HOST_PRESSURE_FILE", "/dev/null");
+
 /// A stand-in `perf_bounds` binary for `ci-steps perf-bounds`
 /// (CI_STEPS_PERF_BOUNDS_BIN): it lists as many timing tests as
 /// tests/perf_bounds.rs declares, and its run sleeps 1 s.
@@ -5461,6 +5472,7 @@ fn cdo_slot_two_perf_bounds_in_one_hold_one_is_refused() {
                 &[],
                 &[
                     ("CI_STEPS_PERF_BOUNDS_BIN", bin_s.as_str()),
+                    NO_HOST_PRESSURE,
                     token,
                     ("CDO_SLOT_BUILD_SCRIPTS", script.as_str()),
                     // HANG, not 20 s (TLS-150): a drain that must outlast the
@@ -5576,6 +5588,7 @@ fn cdo_slot_perf_bounds_under_its_own_timed_run_does_not_wait_for_it() {
             &[
                 ("PATH", &path),
                 ("CI_STEPS_PERF_BOUNDS_BIN", &bin_s),
+                NO_HOST_PRESSURE,
                 // HANG, not 20 s (TLS-150): a drain that must outlast the
                 // other party's end under a gate's load; a break still ends
                 // in a refusal, after it.
@@ -5632,6 +5645,7 @@ fn cdo_slot_a_foreign_entry_timing_keeps_no_turn_from_a_nested_one() {
             &[],
             &[
                 ("CI_STEPS_PERF_BOUNDS_BIN", bin_s.as_str()),
+                NO_HOST_PRESSURE,
                 token,
                 ("CDO_SLOT_TEST_PAUSE_ACQUIRED_S", "60"),
                 // HANG, not 20 s (TLS-150): a drain that must outlast the
@@ -5675,6 +5689,7 @@ fn cdo_slot_a_foreign_entry_timing_keeps_no_turn_from_a_nested_one() {
                 token,
                 ("PATH", &path),
                 ("CI_STEPS_PERF_BOUNDS_BIN", &bin_s),
+                NO_HOST_PRESSURE,
                 // HANG, not 20 s (TLS-150): a drain that must outlast the
                 // other party's end under a gate's load; a break still ends
                 // in a refusal, after it.
@@ -5761,6 +5776,7 @@ fn cdo_slot_every_timed_start_passes_one_gate_in_both_orders() {
                 &[],
                 &[
                     ("CI_STEPS_PERF_BOUNDS_BIN", bin_s.as_str()),
+                    NO_HOST_PRESSURE,
                     token,
                     (hook, secs),
                 ],
@@ -7118,6 +7134,7 @@ fn cdo_slot_a_nested_timed_start_runs_under_its_runs_timing() {
             &[
                 ("PATH", &path),
                 ("CI_STEPS_PERF_BOUNDS_BIN", &bin_s),
+                NO_HOST_PRESSURE,
                 ("CDO_SLOT_ENTRY_WAIT_S", "30"),
             ],
         )

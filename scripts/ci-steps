@@ -275,10 +275,30 @@ run_build() {
 # no `/work`; the Windows machine has no `flock`), it runs with no hold and says
 # so: the slot exists to keep a shared host's other lanes away, and those hosts
 # have none (review r1, Fable and sol: holding it there failed or hung CI).
+# ⟨TLS-149⟩ Other projects' load on the shared host: the cgroup's share stayed at
+# 3 % while the host's `some avg300` read 36 %, and two bounds failed unlabelled
+# (TLS-122's landing, 2026-11-27). So, as cdo-speed does (TLS-76): inside the timed
+# hold (this container's builds are stopped, so what is left is the host's), it
+# waits for the host's `some avg60` to fall to PERF_BOUNDS_LOADED_SHARE, up to
+# CDO_SPEED_CALM_WAIT_S of awake time (600 s, polled every CDO_SPEED_CALM_POLL_S,
+# 10 s; cdo-speed's own knobs and defaults; its third, CDO_SPEED_CALM_PRESSURE, is
+# not read here: the threshold is PERF_BOUNDS_LOADED_SHARE, which a test pins to
+# cdo-speed's default), then runs anyway. Right after the gate's own build, avg60
+# still counts that build for a minute or two, so "waiting" then is the wait doing
+# its job, not other projects' load (Fable r1). Its outcome (calm,
+# timed out, unreadable, no slot) is said in the log. The verdict gives this
+# cgroup's and the host's stall shares over the run, each from its own file; a
+# share above the limit, or a wait that timed out, is UNDER LOAD: an observation
+# beside the tests' verdict, which stays theirs. No automatic retry (owner and sol,
+# 2026-11-27: a calm start does not prove a calm rerun, and its pass would hide
+# the failure). The wait holds the slot (no lane builds meanwhile). With no slot (a
+# CI runner) there is no shared host to wait for: no wait, the shares are printed.
 # Test hook: CI_STEPS_PERF_BOUNDS_BIN, a binary run instead of the built test
 # (no build); CI_STEPS_CPU_PRESSURE_FILE, a file read instead of the cgroup's
-# cpu.pressure; CDO_HOST_SUSPENDED_FILE as scripts/host-suspended reads it.
+# cpu.pressure; CDO_HOST_SUSPENDED_FILE as scripts/host-suspended reads it;
+# CDO_SPEED_HOST_PRESSURE_FILE as cdo-speed reads it, for the host's.
 # test-hooks: CI_STEPS_PERF_BOUNDS_BIN CI_STEPS_CPU_PRESSURE_FILE
+# cdo-speed's CALM_PRESSURE (gate_scripts::perf_bounds_shares_cdo_speeds_calm_limits).
 PERF_BOUNDS_LOADED_SHARE=15
 
 # ⟨TLS-113⟩ The timing tests (`mod release_checks`) exist only without debug
@@ -304,19 +324,155 @@ perf_bounds_incomplete() { # <binary>; prints why, or nothing when complete
     fi
 }
 
-# "<stall total, µs> <source>": this cgroup's CPU stall (`some total=`), else the
-# host's; nothing when neither is readable. The source is named in the label.
-cpu_stall_us() {
-    local f src
-    for f in "${CI_STEPS_CPU_PRESSURE_FILE:-}" /sys/fs/cgroup/cpu.pressure /proc/pressure/cpu; do
-        [ -n "$f" ] && [ -r "$f" ] || continue
-        case "$f" in
-            /proc/pressure/cpu) src="the host's" ;;
-            *) src="this cgroup's" ;;
-        esac
-        printf '%s %s\n' "$(sed -n 's/^some .*total=\([0-9]*\).*/\1/p' "$f" | head -n 1)" "$src"
-        return 0
+# ⟨TLS-149⟩ The whole value of the `some` line's <key> (avg60, total) in a PSI
+# file; nothing when it cannot be read. Cut after 5 s, KILL 1 s later: a FIFO or
+# a stuck file is an unreadable one, never a step that hangs on it, and a read
+# that failed or was cut gives nothing, not part of a line (reviews r1, r2, sol).
+# The callers check the value whole (`10junk` is no number).
+psi_some() { # <file> <key>
+    local line kv fields
+    line="$(timeout -k 1 5 grep -m 1 '^some ' "$1" 2>/dev/null)" || return 0
+    read -ra fields <<<"$line"
+    for kv in "${fields[@]:1}"; do
+        if [[ "$kv" == "$2="* ]]; then
+            echo "${kv#*=}"
+            return 0
+        fi
     done
+}
+
+# ⟨TLS-149⟩ Microseconds as seconds with two decimals, for the log.
+us_text() { printf '%d.%02d' $(($1 / 1000000)) $(($1 % 1000000 / 10000)); }
+
+# ⟨TLS-149⟩ A duration in seconds ("600", "0.2", "08") as whole microseconds, or
+# a failure for anything else ("inf", "1e3", "-1", ""): base 10 always (`08` is
+# eight), and finite (review r1, sol).
+duration_us() { # <seconds>
+    [[ "$1" =~ ^([0-9]{1,9})(\.([0-9]{0,6})[0-9]*)?$ ]] || return 1
+    local frac="${BASH_REMATCH[3]}000000"
+    echo $((10#${BASH_REMATCH[1]} * 1000000 + 10#${frac:0:6}))
+}
+
+# ⟨TLS-149⟩ A PSI average ("15.01", the whole field) in hundredths (1501);
+# nothing when it is not one ("10junk", "15.019").
+psi_hundredths() { # <avg>
+    [[ "$1" =~ ^([0-9]{1,6})(\.([0-9]{1,2}))?$ ]] || return 0
+    local frac="${BASH_REMATCH[3]}00"
+    echo $((10#${BASH_REMATCH[1]} * 100 + 10#${frac:0:2}))
+}
+
+# ⟨TLS-149⟩ cdo-speed's wait_calm, on the awake clock (scripts/awake-clock: a
+# suspend does not use the budget up, unlike `$SECONDS`), each nap cut to the
+# budget left. Sets calm_outcome to calm, timed-out or unreadable (the file
+# missing, malformed or gone while waiting); each is said in the log. With no
+# awake clock (awake-clock fell back to wall time) the wait says so, and so does
+# its timeout (review r2, sol).
+perf_bounds_wait_calm() { # <wait µs> <poll µs> <wait as given> <poll as given>
+    local f="${CDO_SPEED_HOST_PRESSURE_FILE:-/proc/pressure/cpu}" said="" p h left clock=""
+    awake_start
+    while :; do
+        p="$(psi_some "$f" avg60)"
+        h="$(psi_hundredths "$p")"
+        awake_read
+        [ -z "$awake_msg" ] || echo "ci-steps: perf-bounds: $awake_msg"
+        if [[ "$awake_base" != mono && -z "$clock" ]]; then
+            clock=" (wall time: no awake clock)"
+            echo "ci-steps: perf-bounds: the awake clock cannot be read: this wait counts wall time"
+        fi
+        if [ -z "$h" ]; then
+            calm_outcome=unreadable
+            if [ -n "$said" ]; then
+                echo "ci-steps: perf-bounds: host CPU pressure not readable any more (${f}) after $((awake_us / 1000000)) s: running, calm not known"
+            else
+                echo "ci-steps: perf-bounds: no host CPU pressure readable (${f}): running, calm not known"
+            fi
+            return 0
+        fi
+        # "at most", as cdo-speed: 15.00 passes, 15.01 does not.
+        if ((h <= PERF_BOUNDS_LOADED_SHARE * 100)); then
+            calm_outcome=calm
+            if [ -n "$said" ]; then
+                echo "ci-steps: perf-bounds: host CPU pressure ${p} % (avg60), calm enough after $((awake_us / 1000000)) s"
+            else
+                echo "ci-steps: perf-bounds: host CPU pressure ${p} % (avg60): calm"
+            fi
+            return 0
+        fi
+        left=$(($1 - awake_us))
+        if ((left <= 0)); then
+            calm_outcome=timed-out
+            calm_clock="$clock"
+            echo "ci-steps: perf-bounds: host CPU pressure ${p} % (avg60) stayed above ${PERF_BOUNDS_LOADED_SHARE} % for $((awake_us / 1000000)) s${clock}: running anyway, UNDER LOAD"
+            return 0
+        fi
+        if [ -z "$said" ]; then
+            echo "ci-steps: perf-bounds: host CPU pressure ${p} % (avg60) is above ${PERF_BOUNDS_LOADED_SHARE} %: waiting (up to $3 s)"
+            said=1
+        fi
+        if ((left < $2)); then
+            echo "ci-steps: perf-bounds: the next look is cut to the $(us_text "$left") s left of the wait (poll $4 s)"
+            awake_nap "$left"
+        else
+            awake_nap "$2"
+        fi
+    done
+}
+
+# ⟨TLS-149⟩ Adds "<who> CPU stall share ..." to the caller's `shares`, and sets
+# its `loaded` when above PERF_BOUNDS_LOADED_SHARE. Its interval is its own (review
+# r2, sol): each reading lies between two awake-clock readings, so the time
+# between its two readings is at least <lo> and at most <hi> µs. The share is
+# taken over <hi>: a slow reading can only lower it, never make load, as long as
+# every bracket's clock reading is a fresh one. A failed clock read reuses the last
+# time (awake-clock, its first two failures in a row), which would shorten <hi>:
+# a share with a stale endpoint (<stale>, the names of those readings) is not
+# available (review r3, sol; Fable r1 made 23 % UNDER LOAD from a failed c4).
+# When the two brackets cover more than a quarter of <hi>, there is no share.
+# Compared before rounding: 15.99 % is above 15 % (review r1, sol). A malformed
+# total, or one that went backwards, is no share (review r1, sol).
+perf_bounds_share() { # <who> <stall µs before> <after> <lo µs> <hi µs> <stale>
+    if [[ ! "$2" =~ ^[0-9]{1,18}$ || ! "$3" =~ ^[0-9]{1,18}$ ]]; then
+        shares+=("$1 CPU stall share not readable")
+        return 0
+    fi
+    if [ -n "$6" ]; then
+        shares+=("$1 CPU stall share not available: a clock reading failed ($6)")
+        return 0
+    fi
+    if ((10#$3 < 10#$2)); then
+        shares+=("$1 CPU stall total went backwards ($2 to $3 µs): no share")
+        return 0
+    fi
+    if (($5 <= 0 || ($5 - $4) * 4 > $5)); then
+        shares+=("$1 CPU stall share not available: its readings took $(((${5} - ${4}) / 1000)) ms of its $((${5} / 1000)) ms")
+        return 0
+    fi
+    local stalled=$((10#$3 - 10#$2))
+    if ((stalled * 100 > PERF_BOUNDS_LOADED_SHARE * $5)); then
+        shares+=("$1 CPU stall share was $((stalled * 100 / $5)) % (above ${PERF_BOUNDS_LOADED_SHARE} %)")
+        loaded=1
+    else
+        shares+=("$1 CPU stall share was $((stalled * 100 / $5)) %")
+    fi
+}
+
+# ⟨TLS-149⟩ One awake-clock reading into the named variable; notes in
+# `perf_clock_wall` when it was not CLOCK_MONOTONIC, and adds the variable's name
+# to `perf_stale` when the read failed and reused the last time (review r3, sol).
+perf_bounds_clock() { # <variable>
+    awake_read
+    [[ "$awake_base" == mono ]] || perf_clock_wall=1
+    ((awake_fails == 0)) || perf_stale+="$1 "
+    printf -v "$1" '%s' "$awake_us"
+}
+
+# ⟨TLS-149⟩ Which of the named clock readings were stale (perf_stale), as "c4 c5".
+perf_bounds_stale() { # <variable>...
+    local c out=""
+    for c; do
+        [[ " $perf_stale" != *" $c "* ]] || out+="$c "
+    done
+    echo "${out% }"
 }
 
 run_perf_bounds() {
@@ -339,6 +495,18 @@ run_perf_bounds() {
         echo "ci-steps: perf-bounds: the timing tests would not run: ${incomplete}" >&2
         return 1
     fi
+    # ⟨TLS-149⟩ Checked before the slot is taken: a bad knob holds nothing.
+    local wait_s="${CDO_SPEED_CALM_WAIT_S:-600}" poll_s="${CDO_SPEED_CALM_POLL_S:-10}" wait_us poll_us
+    if ! wait_us="$(duration_us "$wait_s")" || ! poll_us="$(duration_us "$poll_s")" || ((poll_us == 0)); then
+        echo "ci-steps: perf-bounds: CDO_SPEED_CALM_WAIT_S ('$wait_s') and CDO_SPEED_CALM_POLL_S ('$poll_s') must be finite decimal seconds, the poll above 0" >&2
+        return 1
+    fi
+    [[ -r "$(dirname "$0")/awake-clock" ]] || {
+        echo "ci-steps: perf-bounds: $(dirname "$0")/awake-clock is missing: the calm wait and the stall shares need it" >&2
+        return 1
+    }
+    # shellcheck source=awake-clock
+    source "$(dirname "$0")/awake-clock"
     local rc=0 no_slot label=""
     no_slot="$(cdo_slot_unavailable)"
     if [ -n "$no_slot" ]; then
@@ -363,35 +531,70 @@ run_perf_bounds() {
         [[ "$rc" == 0 || "$rc" == 4 ]] || build_quiet_stop "perf-bounds' acquire"
         build_quiet_end "perf-bounds' acquire"
     fi
-    local susp0 susp1 stall0 stall1 src t0 t1 prc=0
-    # Each read cut after 5 s, KILL 1 s later (TLS-105 review r3): never a stall.
-    susp0="$(timeout -k 1 5 "$(dirname "$0")/host-suspended" 2>/dev/null)" || susp0=""
-    read -r stall0 src < <(cpu_stall_us)
+    local calm_outcome=no-slot calm_clock=""
+    if [ -n "$no_slot" ]; then
+        echo "ci-steps: perf-bounds: no CDO slot held (${no_slot}): no calm wait"
+    else
+        perf_bounds_wait_calm "$wait_us" "$poll_us" "$wait_s" "$poll_s"
+    fi
+    # ⟨TLS-149⟩ Two sources, each its own file at both ends, never one in place of
+    # the other (review r1, sol): this cgroup's stalls and the host's. Each
+    # reading sits between two awake-clock readings (c0..c5), so each source has
+    # its own interval (review r2, sol; perf_bounds_share). The awake clock is
+    # CLOCK_MONOTONIC, which a suspend does not advance, read with the suspended
+    # seconds in one process (scripts/awake-clock, each read cut after 5 s).
+    local own="${CI_STEPS_CPU_PRESSURE_FILE:-/sys/fs/cgroup/cpu.pressure}"
+    local host="${CDO_SPEED_HOST_PRESSURE_FILE:-/proc/pressure/cpu}"
+    local susp0 susp1 stall0 stall1 hstall0 hstall1 t0 t1 prc=0
+    local c0 c1 c2 c3 c4 c5 perf_clock_wall=0 perf_stale=""
+    awake_start
+    [[ "$awake_base" == mono ]] || perf_clock_wall=1
+    c0=0 susp0="$awake_s0"
+    stall0="$(psi_some "$own" total)"
+    perf_bounds_clock c1
+    hstall0="$(psi_some "$host" total)"
+    perf_bounds_clock c2
     t0=${EPOCHREALTIME//[!0-9]/}
     # From the repository's top, as `cargo test` runs a test binary.
     (cd "$(git rev-parse --show-toplevel)" && "$bin") || prc=$?
     t1=${EPOCHREALTIME//[!0-9]/}
-    read -r stall1 _ < <(cpu_stall_us)
-    susp1="$(timeout -k 1 5 "$(dirname "$0")/host-suspended" 2>/dev/null)" || susp1=""
-    local wall_us=$((t1 - t0)) slept_s=0 awake_us
+    perf_bounds_clock c3
+    susp1="$awake_s"
+    hstall1="$(psi_some "$host" total)"
+    perf_bounds_clock c4
+    stall1="$(psi_some "$own" total)"
+    perf_bounds_clock c5
+    local wall_us=$((t1 - t0)) slept_s=0
     if [[ "$susp0" =~ ^[0-9]+$ && "$susp1" =~ ^[0-9]+$ ]]; then
         slept_s=$((susp1 - susp0))
     fi
-    # The share is of awake time: a suspend stalls nothing and must not dilute it.
-    awake_us=$((wall_us - slept_s * 1000000))
-    if [[ ! "${stall0:-}" =~ ^[0-9]+$ || ! "${stall1:-}" =~ ^[0-9]+$ ]]; then
-        label+=" (CPU pressure not readable: load not checked)"
-    elif ((awake_us <= 0)); then
-        # Whole seconds of suspend can cover a short run (review r2, Fable).
-        label+=" (load not checked: the host slept through the run)"
+    # The shares are of awake time: a suspend stalls nothing and must not dilute
+    # them. Wall time is no awake time: no share on it (review r2, sol).
+    local shares=() loaded=0 joined
+    if ((perf_clock_wall)); then
+        shares+=("CPU stall shares not available: the awake clock could not be read (wall time only)")
+    elif ((c3 - c2 <= 0)); then
+        shares+=("load not checked: no awake time measured over the run")
     else
-        local stalled=$((stall1 - stall0))
-        # Compared before rounding: 15.99 % is above 15 % (review r1, sol).
-        if ((stalled * 100 > PERF_BOUNDS_LOADED_SHARE * awake_us)); then
-            label+=" UNDER LOAD: ${src} CPU stall share was $((stalled * 100 / awake_us)) % (above ${PERF_BOUNDS_LOADED_SHARE} %)"
-        else
-            label+=" (${src} CPU stall share $((stalled * 100 / awake_us)) %)"
-        fi
+        perf_bounds_share "this cgroup's" "$stall0" "$stall1" $((c4 - c1)) $((c5 - c0)) \
+            "$(perf_bounds_stale c0 c1 c4 c5)"
+        perf_bounds_share "the host's" "$hstall0" "$hstall1" $((c3 - c2)) $((c4 - c1)) \
+            "$(perf_bounds_stale c1 c2 c3 c4)"
+    fi
+    # Said whatever the shares were (review r1, sol).
+    case "$calm_outcome" in
+        timed-out)
+            shares+=("the host's CPU pressure (avg60) stayed above ${PERF_BOUNDS_LOADED_SHARE} % for the whole ${wait_s} s wait before the run${calm_clock}")
+            loaded=1
+            ;;
+        unreadable) shares+=("the host's CPU pressure was not readable before the run: calm not known") ;;
+    esac
+    # What was observed, never named the cause: the verdict is the tests' (review r1, sol).
+    joined="$(printf '; %s' "${shares[@]}")"
+    if ((loaded)); then
+        label+=" UNDER LOAD: ${joined:2}"
+    else
+        label+=" (${joined:2})"
     fi
     if ((slept_s >= 1)); then
         label+=" SUSPENDED: the host slept ${slept_s} s during the timing"
