@@ -67,6 +67,7 @@ pub mod d65;
 pub mod d7;
 pub mod d8;
 pub mod d9;
+pub(crate) mod may_load;
 
 use std::collections::{HashMap, HashSet};
 
@@ -833,25 +834,26 @@ pub(crate) fn record_loaded_by_call_before(
     op_anchor: &PAnchor,
 ) -> bool {
     let var_lc = al_syntax::fold_identifier(record_variable_name);
-    for cs in &routine.call_sites {
-        if !before_anchor(&cs.source_anchor, op_anchor) {
-            continue;
-        }
-        // Tier 1: platform built-in loader called ON the record itself.
-        if let PCallee::Member { receiver, method } = &cs.callee
-            && receiver.fold_identifier() == var_lc
-            && PLATFORM_LOADER_METHODS
-                .iter()
-                .any(|m| m.eq_fold_identifier(method))
-        {
-            return true;
-        }
-        // Tier 2: by-var argument into a resolved callee that loads it.
-        if callee_loads_by_var_arg(ctx, cs, &var_lc) {
-            return true;
-        }
+    routine
+        .call_sites
+        .iter()
+        .any(|cs| before_anchor(&cs.source_anchor, op_anchor) && call_site_loads(ctx, cs, &var_lc))
+}
+
+/// Whether call site `cs` loads the record variable `var_lc` (lowercased): tier 1, a platform
+/// built-in loader called ON the record; tier 2, a by-var argument into a resolved callee that
+/// loads it. One call's answer, for [`record_loaded_by_call_before`] and the path walk
+/// ([`may_load`]).
+pub(crate) fn call_site_loads(ctx: &DetectorContext, cs: &PCallSite, var_lc: &str) -> bool {
+    if let PCallee::Member { receiver, method } = &cs.callee
+        && receiver.fold_identifier() == var_lc
+        && PLATFORM_LOADER_METHODS
+            .iter()
+            .any(|m| m.eq_fold_identifier(method))
+    {
+        return true;
     }
-    false
+    callee_loads_by_var_arg(ctx, cs, var_lc)
 }
 
 /// G-16: the BOUND on the callee-load summary's wrapper-chain depth. A callee

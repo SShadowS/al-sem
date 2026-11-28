@@ -1519,6 +1519,120 @@ by Fable).
   leftovers card (`--routes`, per-route literal check, an isolated event's own commit, Windows
   confirmation, `case` labels in the control-flow tree).
 
+### Fixed (ENG-177: d11 and d21 need a load that reaches the operation; parens-less record operations in the statement tree)
+
+- **d11 (Modify without Get) and d21 (read without load) now follow paths.** Both report an
+  operation on a record never loaded before it, and stay silent when a load happens on SOME path
+  (their rule since they were written: `if B then A.Get(1); A.Modify()` is silent). They read
+  "before" as text order, so a load that no path carries to the operation still silenced them:
+  `A.Get(1); A := N; A.Modify()` (N never loaded), a chain `B := L; B := N; C := B`, or
+  `if B then begin A.Get(1); exit; end; A.Modify()`. A walk over the statement tree
+  (`l5::detectors::may_load`) now answers whether some path reaching the operation ends with the
+  record loaded, and the detectors stay silent only when both the old signals and the walk say
+  so: the change can add findings, never drop one.
+  - The walk follows `if`, `case`, loops (to a fixed point), `break`, `continue`, `exit` and a
+    terminating `Error`. A local record starts unloaded; a parameter, a global or `Rec` may be
+    loaded (its state is the caller's). A whole-record copy `A := X` gives A X's state (each
+    value of a conditional expression, ENG-175); a call result or an expression may be loaded.
+    Inside the walk a load counts wherever it stands on the path: one later in a loop body
+    reaches the next pass (the text-order rule stays in the old signals).
+  - The one thing that unloads a record is a copy of a record no path has loaded. `Clear(A)` and
+    `TransferFields` leave a well-defined state (as `Init` and `Copy`). A call may load a record
+    it is handed (a by-var out parameter has the callee's state) unless every binding of it is a
+    resolved by-value parameter, and a procedure may load the record it is called ON (a table
+    procedure runs on the caller's record; a platform method such as `SetRecFilter` resolves to
+    no routine and loads nothing).
+  - What the walk cannot read answers "may be loaded" (the old answer stands): a load or call on
+    a tracked record the tree does not hold (a `case` pattern, `case true of A.Get(1):`; the
+    tree gap is ENG-181), an `asserterror` statement (an error inside is caught), a deep tree, a
+    loop that does not settle, and a named record return value (`procedure F() R: Record X`):
+    the model does not hold the name yet, so `R` is not tracked and never reported until ENG-209
+    adds it (it starts unloaded, like a local).
+  - A tested `Get`/`Find` loads only where it found a record (sol r1, r2); a tested `Insert`
+    loads on both branches (a false `Insert` means the row exists, the record as filled as
+    after a true one: the upsert `if not A.Insert() then A.Modify()` stays silent, Fable r3):
+    `if A.Get(1) then exit; A.Modify()` is reported, `if not A.Get(1) then exit; A.Modify()` is
+    silent, with or without parentheses (`if A.FindFirst then`), and inside `and`/`or`: past a
+    false `A.Get(1) or B` the Get found nothing (reported), past a false `A.Get(1) and B` it may
+    have (silent). A Boolean literal counts (sol r3): `A.Get(1) = false` is `not A.Get(1)`,
+    `A.Get(1) and true` is the Get, and `A.Get(1) or true` says nothing of it. A condition with
+    one value whatever runs (`A.Get(1) or true`, `while true`, folded through `not`, `and`, `or`,
+    `xor`, `=`, `<>` over Boolean literals) never takes its other branch: no state from it
+    reaches what follows (sol r4: `if A.Get(1) or true then begin B.Get(1); exit; end;
+    B.Modify()` would otherwise report a Modify that never runs; CDO: 0 such conditions). The
+    same holds in loop conditions: a `while`
+    ends where its condition is false, a `repeat` where its `until` is true. The statement tree
+    marks such an `if`, `while` or `repeat` with a `CondOp` hint and each tested operation leaf
+    with the branch it is known to have missed on (CDO: 28 condition lines mix a record operation
+    with `and`/`or`, 9 compare one with `true`/`false`, 3 `while` and 1 `until` test one). The r0
+    corpus's L2 feature snapshot moves for the routines with such a node: each row gains the
+    `CondOp` hint and nothing else (with the hint read as none, every hash equals the old golden).
+  - A ternary's two alternatives are exclusive (sol r1): `Ok := B ? A.Get(1) : A.Modify()` is
+    reported. Each side is walked from the state before the ternary and the two are joined. A
+    nested ternary, a ternary as an `if` condition and a `case` over a tested operation still
+    count the load as possible on every path (silent, as before; no false finding, since nothing
+    in an expression unloads a record): ENG-237 (CDO: 0 ternaries with a record operation, 1
+    such `case`).
+  - The task asked instead for "loaded only when EVERY reaching assignment is loaded". Measured
+    first: on CDO that rule moved no finding, and it would have made only the copy case strict
+    while the direct case (`if B then A.Get(1)`) stays a "some path" rule.
+- **A parens-less record operation in a condition is in the statement tree.**
+  `ir_walk::harvest` gave a parens-less read a leaf only when it had a call-site id, so
+  `if L.FINDSET then` and `until L.NEXT = 0` were no leaf at all: every reader of the statement
+  tree (the L4 walker, this walk) missed those operations. It now emits the operation leaf (or
+  the either-node where a table procedure may run, ENG-173). `explain`'s `conditionality` of
+  such an operation moves from `unknown` to what its parenthesised twin already said
+  (`loop-body`, `unconditional-on-success`; Fable r1 ran 20 twin shapes: `analyze`,
+  `fingerprint --witness all` and `query effects` byte-equal, `explain` 9 values moved). On CDO
+  it corrects 11 routines' L4 parameter summaries (each loads its own `var` parameter first, as
+  `if Hdr.FIND then` or `if not VendorLedgerEntry.FINDFIRST then exit;`): ten go from
+  `requires_loaded_at_entry` `Unknown` to `No`, one from `Yes` (with `"Vendor No."` required) to
+  `No`. The frozen CDO digest is re-frozen with that attribution
+  (`tests/l4-summary-baseline/README.md`).
+- **CDO (pinned `bc3ccb18`, `cdo-before-after` c6f61f04 against 9300584d):** no finding and no
+  fingerprint added or removed at `--scope primary` (2306) or `--scope all` (32429); unknown
+  edges 0 → 0. The first draft added 10 (d11 +8, d21 +2): every one was triaged against source
+  and was a false positive (a `TransferFields`-built record, the `Clear`-then-insert pattern, a
+  record filled through a by-var argument, a parens-less `FINDSET` the tree left out, and `CalcSums`
+  on a record handed to an event), which the rules above fix. Two older false-positive classes
+  that triage showed are filed: ENG-179 (d21 reports `CalcSums`, which needs no loaded record;
+  138 base findings) and ENG-180 (the textual rule does not count `TransferFields`/`Clear`).
+  Fable's review (r1) found the defects on both sides that ENG-182 holds: one record spelled
+  quoted and unquoted, a table procedure that loads the record it runs on, a built-in that takes
+  a record by value, `Copy` from an unloaded record. Its r2 found two gaps left by this change,
+  filed as ENG-183: a copy whose source is loaded later in a loop (the text-order rule, on master
+  too), and `asserterror` setting every tracked record to "may be loaded".
+- **CDO, final head (`cdo-before-after` 0ea800d4 against 49985266):** `--scope primary` 2306 →
+  2306, nothing moved; `--scope all` 32405 → 32416, 11 added and none removed (d11 283 → 292,
+  d21 937 → 939); unknown edges 0 → 0; census unchanged. Every added finding is past a failed
+  `Get`/`FindFirst` (the tested-load rule), triaged against source: the 9 d11 are `Validate` on
+  the create path before an `Insert` (Base Application's retention-policy setup, System
+  Application's `FindOrCreateRetentionPeriod`, a Continia CDN customer and vendor setup), the
+  class master already reports when no `Get` comes first (ENG-185: whether `Validate` before
+  `Insert` on a fresh record is a defect at all); the 2 d21 are `CalcSums` on the not-found branch
+  of the item-charge posting in PurchPost and SalesPost (ENG-179: `CalcSums` needs no loaded
+  record).
+- **Tests and red proofs.** `cli_d11_load_paths` runs `alsem analyze` on 35 shapes: silent where
+  a branch, `case` (with or without a match), conditional expression or loop loads on one path
+  (a later pass, `break`, `continue` included), a field write, a call result, a parameter, a
+  chain, `Clear`, a by-var fill, a table procedure on the source, `TransferFields`, a parens-less
+  load, a `case` pattern, `asserterror`; reported for a later unloaded copy, a broken chain,
+  `exit`, a terminating `Error` (one handed the source record too), a resolved by-value
+  argument, a platform method on the record, a load only in unreachable code, a parens-less load
+  then copy, and one d21 read. Each break failed it, each restore passed: the walk ignored; a copy always
+  loaded; `exit` not ending its path; an AND join; `harvest` leaving out the parens-less
+  operation; a record handed to a call keeping its state; `TransferFields` not loading; the
+  unseen-load guard off; `asserterror` as a plain block; a call ON the record not loading it; a
+  resolved by-value argument loading; a terminating `Error` going on; a `case` without `else`
+  losing the no-match path; `break` and `continue` not recorded on their loop; one loop round
+  instead of the fixed point; any method on the record counted as a load; a terminating `Error`
+  call site left unseen; unreachable code not marked seen.
+- **Goldens.** The CDO whole-program L4 digest (`tests/l4-summary-baseline/cdo-whole-program-digest.txt`,
+  `4041daeb…` -> `28079474…`), attributed above; no other golden moved (`check-goldens`, 2228
+  tests).
+- **Speed (cdo-speed, 9300584d against c6f61f04):** PASS; instructions build x1.0003, round total
+  x0.9991; peak memory x0.979.
+
 ### Fixed (ENG-178: table procedures named like record built-ins: four follow-ups from ENG-173)
 
 From Fable's second review of ENG-173 (`/work/.al-sem/engine-notes/eng173/fable-eng173-r2.md`).

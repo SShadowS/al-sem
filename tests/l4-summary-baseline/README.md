@@ -319,6 +319,19 @@ CDO_WS=<path> ENFORCE_CDO_WS=1 L4_CANONICAL_DUMP=/tmp/l4-cdo.txt \
   predicate (`may_be_rebound_elsewhere`) withholds it when the RecordRef is a parameter or global
   joined with another, aliased, assigned, or passed to a call. No write, table or ordering moved.
   (The digest was written from the head dump's printed value, not by a regen.)
+- **2026-11-23, ENG-177** (`alsem/eng-177-loaded-every-assignment`, head `9300584d`; a parens-less
+  record operation in a condition is an operation leaf of the statement tree). Whole-program
+  `4041daeb…` -> `28079474…`; reverse index unchanged. 5479 routines throughout, none added or
+  removed. Exact single-variable attribution: with only the new leaf disabled
+  (`ir_walk::harvest`'s `op_id_by_expr` lookup filtered out), the test passes against the old
+  digest. The canonical dumps (`L4_CANONICAL_DUMP`, off against on) differ in 46 lines across
+  11 routines, and `aldump --r3a2-summary-core` moves the same 11, named through the fingerprint
+  inventory. Ten `CDODocumentPrintFunctions.<X>IsSendAsEMail(var Hdr; ReportID)` routines open
+  with `if Hdr.FIND then exit(..)`: their parameter goes from `requires_loaded_at_entry` and
+  `mutates_before_load` `Unknown` to `No`. `CDORemittanceManagement.VendorLedgerEntryEMailRemittance`
+  opens with `if not VendorLedgerEntry.FINDFIRST then exit;` and then reads `"Vendor No."`: it
+  goes from `requires_loaded_at_entry: Yes` with `"Vendor No."` required to `No`, none required.
+  Each routine loads its own parameter first; the tree used to leave that load out.
 - **2026-11-14, ENG-19** (`alsem/eng-19-request-page-runs`, engine limits L20). Whole-program
   `fde6e4f3…` -> `b2624796…`; reverse index unchanged. Measured by dumping the canonical
   serialization (`L4_CANONICAL_DUMP`) at master `6852a891` (matches the old digest) and at the
