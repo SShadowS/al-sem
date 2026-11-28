@@ -2287,15 +2287,31 @@ impl<'a> IrCfn<'a> {
     fn harvest(&self, eid: ExprId, out: &mut Vec<PCFNNode>) {
         use ExprKind::*;
         let e = self.ir().expr(eid);
-        // A parens-less call: the walk gave the read itself a call-site id.
-        if !matches!(e.kind, Call { .. })
-            && let Some(cs) = self.spine.cs_id_by_expr.get(&eid)
-        {
-            self.harvest_receiver(eid, out);
-            let mut leaf = cfn_node("call");
-            leaf.callsite_id = Some(cs.clone());
-            out.push(leaf);
-            return;
+        // A parens-less call: the walk gave the read itself a call-site id, an operation id (a
+        // record operation: `if L.FINDSET then`, `until L.NEXT = 0`; ENG-177: it was no leaf at
+        // all, so every reader of the tree missed it), or both (a table procedure may run).
+        if !matches!(e.kind, Call { .. }) {
+            let op = self.spine.op_id_by_expr.get(&eid);
+            let cs = self.spine.cs_id_by_expr.get(&eid);
+            let leaf = match (op, cs) {
+                (Some(op), Some(cs)) => Some(self.either_op_or_call(op, cs, &[], &e.origin)),
+                (Some(op), None) => {
+                    let mut leaf = cfn_node("op");
+                    leaf.operation_id = Some(op.clone());
+                    Some(leaf)
+                }
+                (None, Some(cs)) => {
+                    let mut leaf = cfn_node("call");
+                    leaf.callsite_id = Some(cs.clone());
+                    Some(leaf)
+                }
+                (None, None) => None,
+            };
+            if let Some(leaf) = leaf {
+                self.harvest_receiver(eid, out);
+                out.push(leaf);
+                return;
+            }
         }
         match &e.kind {
             Call { function, args } => {
@@ -2378,9 +2394,14 @@ impl<'a> IrCfn<'a> {
                 // #343: only one alternative runs.
                 let start = out.len();
                 self.harvest(*then_value, out);
+                let mid = out.len();
                 self.harvest(*else_value, out);
-                for l in &mut out[start..] {
-                    l.rare_mut().path_hint = Some(PathHint::MayRun);
+                for (k, l) in out[start..].iter_mut().enumerate() {
+                    let rare = l.rare_mut();
+                    rare.path_hint = Some(PathHint::MayRun);
+                    // ENG-177 (sol r1): which alternative (a nested ternary keeps its own).
+                    rare.ternary_arm
+                        .get_or_insert((eid.index(), start + k < mid));
                 }
             }
             TypeOp { .. } | List(_) => {
@@ -2823,12 +2844,150 @@ impl<'a> IrCfn<'a> {
     /// top-level leaf of `leaves` (the condition's harvested leaves), where the
     /// path walk looks for it; otherwise no hint.
     fn cond_call(&self, cond: ExprId, leaves: &[PCFNNode]) -> Option<PathHint> {
-        let (cs, negated) = self.cond_call_site(cond)?;
-        (leaves.last().and_then(|l| l.callsite_id.as_ref()) == Some(cs))
-            .then_some(PathHint::CondCall { negated })
+        let (e, negated) = self.cond_whole(cond);
+        let cs = self.spine.cs_id_by_expr.get(&e)?;
+        (leaves.last()?.callsite_id.as_ref() == Some(cs)).then_some(PathHint::CondCall { negated })
     }
 
-    fn cond_call_site(&self, cond: ExprId) -> Option<(&String, bool)> {
+    /// ENG-177 (sol r1, r2): marks each top-level record-operation leaf of an `if`
+    /// condition whose Boolean value the branch decides ([`PCFNRare::missed_on`]);
+    /// whether any was marked. A leaf from a ternary alternative keeps its own walk.
+    fn mark_tested_ops(&self, cond: ExprId, leaves: &mut [PCFNNode]) -> bool {
+        let mut known = Vec::new();
+        self.tested_ops(cond, Some(true), Some(false), &mut known);
+        let mut any = false;
+        for (op, on_then, on_else) in known {
+            let missed = (on_then == Some(false), on_else == Some(false));
+            if missed == (false, false) {
+                continue;
+            }
+            for l in leaves.iter_mut().filter(|l| {
+                l.kind == "op" && l.operation_id.as_ref() == Some(op) && l.ternary_arm().is_none()
+            }) {
+                l.rare_mut().missed_on = Some(missed);
+                any = true;
+            }
+        }
+        any
+    }
+
+    /// The record operations (with no call site) used as a Boolean in `e`, with the
+    /// value each is known to have on the `then` and the `else` branch, given `e`'s
+    /// (`None`: not known). `not` flips it; `X and Y` true means both true, `X or Y`
+    /// false means both false; any other operator says nothing about its operands.
+    fn tested_ops<'s>(
+        &'s self,
+        e: ExprId,
+        on_then: Option<bool>,
+        on_else: Option<bool>,
+        out: &mut Vec<(&'s String, Option<bool>, Option<bool>)>,
+    ) {
+        use ExprKind::*;
+        match &self.ir().expr(e).kind {
+            Parenthesized(x) => self.tested_ops(*x, on_then, on_else, out),
+            Unary {
+                op: UnaryOp::Not,
+                operand,
+            } => self.tested_ops(*operand, on_then.map(|b| !b), on_else.map(|b| !b), out),
+            Binary { op, lhs, rhs } => {
+                // sol r3: a Boolean literal operand. `X and true`, `X or false`, `X = true`,
+                // `X <> false`, `X xor false` are X; `X = false`, `X <> true`, `X xor true` are
+                // `not X`; `X and false` and `X or true` decide the value alone (one branch never
+                // runs), so nothing is known of X.
+                let (lit, other) = match (self.bool_literal(*lhs), self.bool_literal(*rhs)) {
+                    (Some(b), None) => (Some(b), *rhs),
+                    (None, Some(b)) => (Some(b), *lhs),
+                    _ => (None, *lhs),
+                };
+                let flip = |v: Option<bool>| v.map(|b| !b);
+                match (op, lit) {
+                    (BinaryOp::And | BinaryOp::Or, None) => {
+                        let kept = *op == BinaryOp::And;
+                        let k = |v: Option<bool>| v.filter(|b| *b == kept);
+                        for s in [lhs, rhs] {
+                            self.tested_ops(*s, k(on_then), k(on_else), out);
+                        }
+                    }
+                    (BinaryOp::And, Some(true)) | (BinaryOp::Or, Some(false)) => {
+                        self.tested_ops(other, on_then, on_else, out)
+                    }
+                    (BinaryOp::Eq, Some(b)) | (BinaryOp::Ne | BinaryOp::Xor, Some(b @ false)) => {
+                        let same = (*op == BinaryOp::Eq) == b;
+                        if same {
+                            self.tested_ops(other, on_then, on_else, out)
+                        } else {
+                            self.tested_ops(other, flip(on_then), flip(on_else), out)
+                        }
+                    }
+                    (BinaryOp::Ne | BinaryOp::Xor, Some(true)) => {
+                        self.tested_ops(other, flip(on_then), flip(on_else), out)
+                    }
+                    _ => {}
+                }
+            }
+            _ => {
+                if !self.spine.cs_id_by_expr.contains_key(&e)
+                    && let Some(op) = self.spine.op_id_by_expr.get(&e)
+                {
+                    out.push((op, on_then, on_else));
+                }
+            }
+        }
+    }
+
+    /// ENG-177 (sol r4): the one value a condition has whatever runs, folded through
+    /// parentheses, `not`, `and`, `or`, `xor`, `=`, `<>` over Boolean literals (`X or true`
+    /// is true whatever X is; AL still evaluates X, so its leaves stay).
+    fn const_bool(&self, e: ExprId) -> Option<bool> {
+        use ExprKind::*;
+        match &self.ir().expr(e).kind {
+            Parenthesized(x) => self.const_bool(*x),
+            Literal(al_syntax::ir::Literal::Bool(b)) => Some(*b),
+            Unary {
+                op: UnaryOp::Not,
+                operand,
+            } => self.const_bool(*operand).map(|b| !b),
+            Binary { op, lhs, rhs } => {
+                let (l, r) = (self.const_bool(*lhs), self.const_bool(*rhs));
+                match op {
+                    BinaryOp::And if l == Some(false) || r == Some(false) => Some(false),
+                    BinaryOp::Or if l == Some(true) || r == Some(true) => Some(true),
+                    BinaryOp::And => Some(l? && r?),
+                    BinaryOp::Or => Some(l? || r?),
+                    BinaryOp::Eq => Some(l? == r?),
+                    BinaryOp::Ne | BinaryOp::Xor => Some(l? != r?),
+                    _ => None,
+                }
+            }
+            _ => None,
+        }
+    }
+
+    /// The condition marks an `if`, `while` or `repeat` node needs: the tested record
+    /// operations ([`PathHint::CondOp`]) and a constant value.
+    fn mark_condition(&self, n: &mut PCFNNode, cond: ExprId, leaves: &mut [PCFNNode]) {
+        if n.path_hint().is_none() && self.mark_tested_ops(cond, leaves) {
+            n.rare_mut().path_hint = Some(PathHint::CondOp);
+        }
+        if let Some(b) = self.const_bool(cond) {
+            n.rare_mut().const_cond = Some(b);
+        }
+    }
+
+    /// `true` / `false` (through parentheses).
+    fn bool_literal(&self, mut e: ExprId) -> Option<bool> {
+        loop {
+            match &self.ir().expr(e).kind {
+                ExprKind::Parenthesized(x) => e = *x,
+                ExprKind::Literal(al_syntax::ir::Literal::Bool(b)) => return Some(*b),
+                _ => return None,
+            }
+        }
+    }
+
+    /// The condition's whole expression through parentheses and one `not`, and
+    /// whether that `not` is there.
+    fn cond_whole(&self, cond: ExprId) -> (ExprId, bool) {
         use ExprKind::*;
         let strip = |mut e: ExprId| {
             while let Parenthesized(x) = &self.ir().expr(e).kind {
@@ -2846,7 +3005,7 @@ impl<'a> IrCfn<'a> {
             e = strip(*operand);
             negated = true;
         }
-        self.spine.cs_id_by_expr.get(&e).map(|cs| (cs, negated))
+        (e, negated)
     }
 
     fn harvest_vec(&self, eid: ExprId) -> Vec<PCFNNode> {
@@ -2869,10 +3028,11 @@ impl<'a> IrCfn<'a> {
                 let mut n = cfn_node("if");
                 n.children = Some(vec![self.build_block(*then_block)]);
                 n.else_children = else_block.map(|b| vec![self.build_block(b)]);
-                let leaves = self.harvest_vec(*cond);
+                let mut leaves = self.harvest_vec(*cond);
                 if let Some(h) = self.cond_call(*cond, &leaves) {
                     n.rare_mut().path_hint = Some(h);
                 }
+                self.mark_condition(&mut n, *cond, &mut leaves);
                 n.condition_leaves = some_if(leaves);
                 n.condition_guard = self.simple_guard(*cond).map(Box::new);
                 if n.condition_guard.is_none()
@@ -2949,7 +3109,10 @@ impl<'a> IrCfn<'a> {
             While { cond, body } => {
                 let mut n = cfn_node("while");
                 n.children = Some(vec![self.build_block(*body)]);
-                n.condition_leaves = some_if(self.harvest_vec(*cond));
+                // sol r3: the body runs where the condition is true, the loop ends where false.
+                let mut leaves = self.harvest_vec(*cond);
+                self.mark_condition(&mut n, *cond, &mut leaves);
+                n.condition_leaves = some_if(leaves);
                 n.flow = self.flow_cond(*cond);
                 n
             }
@@ -2999,7 +3162,10 @@ impl<'a> IrCfn<'a> {
             Repeat { body, until } => {
                 let mut n = cfn_node("repeat");
                 n.children = Some(self.block_items(*body));
-                n.condition_leaves = some_if(self.harvest_vec(*until));
+                // sol r3: the loop ends where the condition is true, goes round where false.
+                let mut leaves = self.harvest_vec(*until);
+                self.mark_condition(&mut n, *until, &mut leaves);
+                n.condition_leaves = some_if(leaves);
                 n.flow = Self::flow_loop(self.expr_text(*until));
                 n
             }

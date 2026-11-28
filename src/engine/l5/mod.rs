@@ -173,6 +173,8 @@ pub mod prove;
 // Agent-tasks milestone E1: prove's filters (`--match`, `--site`, `--op`,
 // `--table`), message text, one route with selected guards.
 pub mod prove_slice;
+// ENG-165: prove's `commit-between --after A --before B`.
+pub mod commit_between;
 // Agent-tasks milestone A: prove's callers' context questions (the reverse
 // cone, evaluated per caller edge).
 pub mod callers_context;

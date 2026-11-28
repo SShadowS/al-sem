@@ -898,3 +898,20 @@ sample:
 - an assumption whose `subscribersConsidered` is not empty;
 - a digest in human format for an ambiguous name (the `differs in:` lines);
 - a test whose code path was not kept.
+
+## 5. Runtime facts `prove … commit-between` relies on (ENG-165)
+
+Measured on the **BC 28 Linux sidecar** (platform 28.0.54946.56477, 2026-11-25), **Windows
+confirmation pending** (repo CLAUDE.md: a Linux result is confirmed on a Windows Cronus before it
+is a platform fact). Probe app and results: `/work/.al-sem/engine-notes/eng165/bcprobe/`
+(`RESULTS.md`; rerun it on a Windows Cronus, test codeunit 71657). Design:
+`docs/superpowers/specs/2026-11-25-eng165-commit-between-design.md` §2.4.
+
+| Fact | Tests | What the question does with it |
+|---|---|---|
+| A call in an argument runs before the call that takes it, arguments left to right; a condition before its branch | T11 | the control-flow graph orders nested calls so |
+| `Page.RunModal` with a write pending raises an error ("An error occurred and the transaction is stopped."), with no test handler; nothing pending: no error | T18, T19 (T03 under a ModalPageHandler: no error) | a page run in the region where a write may be pending is an error row (`runmodal-pending-write`), never a commit; after a direct `Commit()` on every path, none |
+| `Report.RunModal` of a processing-only report without a request page, write pending: no error, no commit | T05, T20 | not a commit; a report with a request page is listed as `unmeasured` |
+| An isolated event with nothing pending commits its subscribers' own writes and traps their errors; with a write pending it commits nothing of the caller's and traps nothing | T07, T08, T09, T13 | the event's own commit is not a class-1 commit (no engine fact yet: leftovers card) |
+| A `Commit()` inside an isolated subscriber commits the caller's pending write | T14, T16 (plain subscriber T15, T17) | class 1 |
+| A write pending at a checked `Codeunit.Run` is an error at the run (L28) | ENG-09 | `run-error-rolls-back-a` error row, not a commit |

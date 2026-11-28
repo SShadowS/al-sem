@@ -116,7 +116,10 @@ use crate::program::resolve::full::LoadedDependencies;
 /// `up.directSites` adds `dependencyRoutines`, `workspaceByOp`,
 /// `dependencyByOp`, `workspaceByObject` and `keyRelevant`; field mode's
 /// `fieldSummary` adds `confirmedSites` and `candidateSites`.
-const QUERY_SCHEMA_VERSION: &str = "3.10.0";
+/// 3.11.0 (ENG-217, additive): a field-mode `declaredKeys[]` entry whose key
+/// has a member naming no field adds `unresolved` (those members' declared
+/// names); `fields` still holds every member by name.
+const QUERY_SCHEMA_VERSION: &str = "3.11.0";
 
 /// Which direction(s) a `query touches` run reports.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -2659,12 +2662,21 @@ fn render_query_touches_body(
                 .workspace
                 .tables
                 .iter()
-                .filter(|t| t.id == table.id)
+                // The real table's keys (its extensions' are merged onto it); a
+                // tableextension stub sharing the id is another object (G-5,
+                // Fable r1 on ENG-217).
+                .filter(|t| t.id == table.id && !t.is_extension_stub)
                 .flat_map(|t| {
                     t.keys.iter().flat_map(move |k| {
-                        k.fields.iter().filter_map(move |f| {
-                            t.field_name(f).map(super::field_touches::field_key)
-                        })
+                        // ENG-217: a member that did not resolve counts by
+                        // its declared name.
+                        k.fields
+                            .iter()
+                            .zip(&k.members)
+                            .filter_map(move |(f, m)| match f {
+                                Some(f) => t.field_name(f).map(super::field_touches::field_key),
+                                None => Some(super::field_touches::field_key(m)),
+                            })
                     })
                 })
                 .collect();
@@ -3258,10 +3270,16 @@ fn table_keys_line(model: &Model, table_id: &str) -> String {
         return String::new();
     };
     let key_text = |k: &crate::program::model::workspace::ModelKey| {
+        // ENG-217: a member that did not resolve is named as declared and
+        // marked, never left out (the key is not a shorter key).
         let names: Vec<String> = k
             .fields
             .iter()
-            .filter_map(|f| t.field_name(f).map(quoted))
+            .zip(&k.members)
+            .filter_map(|(f, m)| match f {
+                Some(f) => t.field_name(f).map(quoted),
+                None => Some(format!("{} (not resolved)", quoted(m))),
+            })
             .collect();
         let text = if names.is_empty() {
             "fields not resolved".to_string()
@@ -6869,15 +6887,40 @@ fn render_field_touches(
         })
         .collect();
     let field_name_of = |id: &str| table.field_name(id).unwrap_or(id).to_string();
+    // ENG-217: a key's members by name, one that did not resolve by its
+    // declared name (never left out); the human text marks it (`marked`), the
+    // json lists it apart (sol r2: `fields` holds names only).
+    let key_names = |k: &crate::program::model::workspace::ModelKey, marked: bool| -> Vec<String> {
+        k.fields
+            .iter()
+            .zip(&k.members)
+            .map(|(f, m)| match f.as_deref() {
+                Some(f) => field_name_of(f),
+                None if marked => format!("\"{}\" (not resolved)", m.replace('"', "\"\"")),
+                None => m.clone(),
+            })
+            .collect()
+    };
     let keys_json: Vec<Value> = answer
         .declared_keys
         .iter()
         .map(|&i| {
             let k = &table.keys[i];
-            let mut v = json!({"id": k.id, "fields": k.fields.iter().map(|f| field_name_of(f)).collect::<Vec<_>>()});
+            let mut v = json!({"id": k.id, "fields": key_names(k, false)});
             // r3 L1 (additive): the table extension that adds the key.
             if let Some(ext) = &k.declared_by {
                 v["declaredBy"] = json!(ext);
+            }
+            // ENG-217 (additive): the members that did not resolve.
+            let unresolved: Vec<&String> = k
+                .fields
+                .iter()
+                .zip(&k.members)
+                .filter(|(f, _)| f.is_none())
+                .map(|(_, m)| m)
+                .collect();
+            if !unresolved.is_empty() {
+                v["unresolved"] = json!(unresolved);
             }
             v
         })
@@ -7101,7 +7144,7 @@ fn render_field_touches(
             .iter()
             .map(|&i| {
                 let k = &table.keys[i];
-                let names: Vec<String> = k.fields.iter().map(|f| field_name_of(f)).collect();
+                let names: Vec<String> = key_names(k, true);
                 // r3 L1: a key a table extension adds is named by it.
                 match &k.declared_by {
                     Some(ext) => format!(

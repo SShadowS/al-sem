@@ -1024,6 +1024,18 @@ pub struct PCFNRare {
     /// r3 E1: what the node says about an Integer, Option or Enum value
     /// ([`ValueFact`]).
     pub value_fact: Option<ValueFact>,
+    /// ENG-177 (sol r1): on a [`PathHint::MayRun`] leaf, its ternary (the
+    /// expression's index, unique in the routine) and whether it is from the
+    /// `then` alternative; the innermost ternary for a nested one.
+    pub ternary_arm: Option<(usize, bool)>,
+    /// ENG-177 (sol r1, r2): on a record-operation leaf of an `if` condition whose
+    /// Boolean value the branch decides ([`PathHint::CondOp`]): whether the operation
+    /// is known to have found nothing on the `then` branch and on the `else` branch.
+    pub missed_on: Option<(bool, bool)>,
+    /// ENG-177 (sol r4): on an `if`, `while` or `repeat` whose condition has one value
+    /// whatever runs (`true`, `A.Get(1) or true`, `not false and true`): that value. The
+    /// branch for the other value never runs.
+    pub const_cond: Option<bool>,
 }
 
 impl std::fmt::Debug for PCFNNode {
@@ -1059,6 +1071,15 @@ impl PCFNNode {
     }
     pub fn path_hint(&self) -> Option<PathHint> {
         self.rare.as_ref().and_then(|r| r.path_hint)
+    }
+    pub fn ternary_arm(&self) -> Option<(usize, bool)> {
+        self.rare.as_ref().and_then(|r| r.ternary_arm)
+    }
+    pub fn missed_on(&self) -> Option<(bool, bool)> {
+        self.rare.as_ref().and_then(|r| r.missed_on)
+    }
+    pub fn const_cond(&self) -> Option<bool> {
+        self.rare.as_ref().and_then(|r| r.const_cond)
     }
     pub fn table_case(&self) -> Option<&TableCase> {
         self.rare.as_ref().and_then(|r| r.table_case.as_ref())
@@ -1309,6 +1330,14 @@ pub enum PathHint {
     /// (through parentheses): whether it is negated. The call is the `if`'s
     /// last top-level condition leaf.
     CondCall { negated: bool },
+    /// ENG-177 (sol r1-r3): on an `if`, `while` or `repeat` whose condition holds a
+    /// record operation with no call site whose Boolean result the branch decides
+    /// (`if A.Get(1)`, `if not A.FindFirst or B`, `while A.Get(1) = false`, through
+    /// parentheses, `not`, `and`, `or` and a Boolean literal compared or combined with
+    /// it): its condition leaves carry [`PCFNRare::missed_on`] (`then` = the condition
+    /// true: an `if`'s then-branch, a `while` body, a `repeat`'s exit). A branch where
+    /// it found nothing has not loaded the record.
+    CondOp,
     /// On an `exit(true)` / `exit(false)`: the literal value.
     Exit(bool),
     /// On the node of an `asserterror` statement: an error inside is caught.

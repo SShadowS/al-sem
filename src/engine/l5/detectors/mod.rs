@@ -67,6 +67,7 @@ pub mod d65;
 pub mod d7;
 pub mod d8;
 pub mod d9;
+pub(crate) mod may_load;
 
 use std::collections::{HashMap, HashSet};
 
@@ -495,23 +496,24 @@ pub(crate) fn owner_is_judged(routine: &ModelRoutine, ctx: &DetectorContext) -> 
 /// need load coverage (d3) and PK entry-requirements never force a wider
 /// narrow (d42). An empty/missing first key excludes nothing — when the PK
 /// cannot be determined the detectors keep firing.
+///
+/// The set only ever EXCLUDES (a member here is one a detector stays quiet
+/// about), so it holds exactly the members known to be primary-key fields:
+/// each resolved member, a system field (`SystemId`) by its display name
+/// included (Fable r1 on ENG-217: it was looked up among declared fields
+/// only, so a key with one read as shorter). A member that did not resolve
+/// (ENG-217, `ModelKey::fields` `None`) is not known to be one, so it is left
+/// out and the detectors keep firing on it (sol r1). A reader that needs the
+/// WHOLE key (the PK's only field) uses `ModelKey::resolved`.
 pub(crate) fn primary_key_field_names_lc(table: &ModelTable) -> HashSet<String> {
-    let field_name_by_id: HashMap<&str, &str> = table
-        .fields
-        .iter()
-        .map(|f| (f.id.as_str(), f.name.as_str()))
-        .collect();
     table
         .keys
         .first()
         .map(|k| {
             k.fields
                 .iter()
-                .filter_map(|fid| {
-                    field_name_by_id
-                        .get(fid.as_str())
-                        .map(|n| n.fold_identifier())
-                })
+                .flatten()
+                .filter_map(|fid| table.field_name(fid).map(|n| n.fold_identifier()))
                 .collect()
         })
         .unwrap_or_default()
@@ -832,25 +834,26 @@ pub(crate) fn record_loaded_by_call_before(
     op_anchor: &PAnchor,
 ) -> bool {
     let var_lc = al_syntax::fold_identifier(record_variable_name);
-    for cs in &routine.call_sites {
-        if !before_anchor(&cs.source_anchor, op_anchor) {
-            continue;
-        }
-        // Tier 1: platform built-in loader called ON the record itself.
-        if let PCallee::Member { receiver, method } = &cs.callee
-            && receiver.fold_identifier() == var_lc
-            && PLATFORM_LOADER_METHODS
-                .iter()
-                .any(|m| m.eq_fold_identifier(method))
-        {
-            return true;
-        }
-        // Tier 2: by-var argument into a resolved callee that loads it.
-        if callee_loads_by_var_arg(ctx, cs, &var_lc) {
-            return true;
-        }
+    routine
+        .call_sites
+        .iter()
+        .any(|cs| before_anchor(&cs.source_anchor, op_anchor) && call_site_loads(ctx, cs, &var_lc))
+}
+
+/// Whether call site `cs` loads the record variable `var_lc` (lowercased): tier 1, a platform
+/// built-in loader called ON the record; tier 2, a by-var argument into a resolved callee that
+/// loads it. One call's answer, for [`record_loaded_by_call_before`] and the path walk
+/// ([`may_load`]).
+pub(crate) fn call_site_loads(ctx: &DetectorContext, cs: &PCallSite, var_lc: &str) -> bool {
+    if let PCallee::Member { receiver, method } = &cs.callee
+        && receiver.fold_identifier() == var_lc
+        && PLATFORM_LOADER_METHODS
+            .iter()
+            .any(|m| m.eq_fold_identifier(method))
+    {
+        return true;
     }
-    false
+    callee_loads_by_var_arg(ctx, cs, var_lc)
 }
 
 /// G-16: the BOUND on the callee-load summary's wrapper-chain depth. A callee
@@ -2745,5 +2748,58 @@ mod walk_paths_tests {
         };
         assert!(ok(block(vec![guard(true), call("p")])));
         assert!(!ok(block(vec![guard(false), call("p")])));
+    }
+}
+
+#[cfg(test)]
+mod primary_key_tests {
+    use super::*;
+    use crate::program::model::workspace::ModelKey;
+
+    /// ENG-217: the primary-key set (d3, d42 and d56 exclude its members)
+    /// holds the members known to be key fields: `key(PK; "No.", SystemId,
+    /// "Ext Code")` with "Ext Code" not resolved is {"no.", "systemid"}: the
+    /// system field counts (Fable r1), the unresolved member does not, so the
+    /// detectors keep firing on it (sol r1). Hand-stated key rows.
+    /// DISCRIMINATION (2026-11-27, each break then restored, green): taking
+    /// an unresolved member by its declared name fails "an unresolved member
+    /// excludes nothing"; looking a member up among declared fields only fails
+    /// "a system field is a key field".
+    #[test]
+    fn the_primary_key_set_holds_the_members_known_to_be_key_fields() {
+        let mut t = crate::program::model::symbol_table::tests::tab("a", 1, "T", false);
+        t.fields.push(crate::program::model::workspace::ModelField {
+            id: "a/table/1/1".into(),
+            physical_table_id: "a/table/1".into(),
+            declaring_object_id: "a/Table/1".into(),
+            declaring_app_id: "a".into(),
+            field_number: 1,
+            name: "No.".into(),
+            field_class: "Normal".into(),
+            data_type: "Code".into(),
+            is_blob_like: false,
+            captions: Default::default(),
+            calc_formula: Vec::new(),
+        });
+        t.keys.push(ModelKey {
+            id: "a/table/1/key/0".into(),
+            fields: vec![
+                Some("a/table/1/1".into()),
+                Some("a/table/1/2000000000".into()),
+                None,
+            ],
+            members: vec!["no.".into(), "systemid".into(), "ext code".into()],
+            declared_by: None,
+        });
+        let pk = primary_key_field_names_lc(&t);
+        assert!(pk.contains("no."), "{pk:?}");
+        assert!(
+            pk.contains("systemid"),
+            "a system field is a key field: {pk:?}"
+        );
+        assert!(
+            !pk.contains("ext code"),
+            "an unresolved member excludes nothing: {pk:?}"
+        );
     }
 }
