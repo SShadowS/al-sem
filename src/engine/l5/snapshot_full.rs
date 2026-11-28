@@ -982,11 +982,18 @@ fn derive_schema(resolved: &Model) -> CborValue {
                 .map(|(_, idx)| idx.to_string())
                 .unwrap_or_else(|| key.id.clone());
             let stable_key = format!("{stable_table}#K{key_index}");
-            // key shape: {fields: stableFieldIds.sort(), isEnabled:true}.
+            // key shape: {fields: stableFieldIds.sort(), isEnabled:true}. A
+            // member that did not resolve enters as `unresolved:<name>`
+            // (ENG-217): the key is not the shorter key's shape, and resolving
+            // it later is a visible change.
             let mut stable_fields: Vec<String> = key
                 .fields
                 .iter()
-                .map(|fid| internal_field_to_stable(fid, &tbl.app_guid))
+                .zip(&key.members)
+                .map(|(fid, member)| match fid {
+                    Some(fid) => internal_field_to_stable(fid, &tbl.app_guid),
+                    None => format!("unresolved:{member}"),
+                })
                 .collect();
             stable_fields.sort();
             let fields_json = format!(
@@ -1020,10 +1027,17 @@ fn derive_schema(resolved: &Model) -> CborValue {
 /// Internal field id `${appGuid}/table/${tableNumber}/${fieldNumber}` →
 /// stable `${appGuid}:Table:${tableNumber}#${fieldNumber}`.
 fn internal_field_to_stable(internal: &str, app_guid: &str) -> String {
-    // Format: appGuid/table/N/F. Recover N + F.
-    let suffix = internal.strip_prefix(&format!("{app_guid}/table/"));
-    match suffix.and_then(|s| s.rsplit_once('/')) {
-        Some((table_n, field_n)) => format!("{app_guid}:Table:{table_n}#{field_n}"),
+    // Format: appGuid/table/N/F. Recover the app, N and F from the id itself:
+    // a tableextension's key can name a field of the table it extends, which
+    // another app declares (ENG-217, sol r2), and that field's stable id is
+    // its own app's, never the raw internal id. `app_guid` is the expected
+    // app, kept for the caller's reading.
+    let _ = app_guid;
+    match internal
+        .split_once("/table/")
+        .and_then(|(app, rest)| rest.rsplit_once('/').map(|(n, f)| (app, n, f)))
+    {
+        Some((app, table_n, field_n)) => format!("{app}:Table:{table_n}#{field_n}"),
         None => internal.to_string(),
     }
 }
@@ -3597,6 +3611,29 @@ page 50818 "T5 I-3 Wizard Alpha"
 /// read through the compact view reaches the snapshot row and
 /// `make_required_perm` with the right witnesses for each first-hop kind. The
 /// policy half is in `policy_facts_oracle_tests`.
+#[cfg(test)]
+mod stable_field_id_tests {
+    /// ENG-217 (sol r2, Fable r2): a key of app X's tableextension may name
+    /// a field of the table it extends, declared by app B: its stable id is
+    /// B's (`B:Table:36#3`), never the raw internal id.
+    /// DISCRIMINATION (2026-11-27, break then restored, green): converting
+    /// with the key's table's app only (the old rule) returns the internal id
+    /// and fails "another app's field".
+    #[test]
+    fn a_field_of_another_app_takes_its_own_apps_stable_id() {
+        assert_eq!(
+            super::internal_field_to_stable("x/table/50100/50100", "x"),
+            "x:Table:50100#50100",
+            "own app's field"
+        );
+        assert_eq!(
+            super::internal_field_to_stable("b/table/36/3", "x"),
+            "b:Table:36#3",
+            "another app's field"
+        );
+    }
+}
+
 #[cfg(test)]
 mod cone_memory_t4_tests {
     use super::*;
