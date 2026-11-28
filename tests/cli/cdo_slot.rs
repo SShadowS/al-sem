@@ -6599,11 +6599,15 @@ fn cdo_slot_a_refused_timing_keeps_its_record_while_held() {
 /// before its commit point), `status` says it is starting: its "since" is the
 /// take, not the start of timing (TLS-160: read as a timing beside a build).
 /// Once committed, the line says no more. A commit mark that is not a regular
-/// file (a FIFO) is never read: `status` returns and says nothing more.
+/// file (a FIFO) is never read: `status` returns and says nothing more. A
+/// stalled read of a real mark is cut at 2 s: the guard still refuses a build
+/// beside the timing.
 ///
 /// Mutations (2026-11-28): the `starting` suffix dropped from timed_describe
-/// -> the draining line lacks it (red); the regular-file check dropped ->
-/// `status` blocks on the FIFO (red); each restored, green.
+/// -> the draining line lacks it (red); the mark read's `timeout` dropped ->
+/// the guard times out and allows (red); the regular-file check and the
+/// `timeout` both dropped -> `status` blocks on the FIFO (red: either alone
+/// keeps it from blocking); each restored, green.
 #[test]
 fn cdo_slot_status_says_a_draining_timing_is_starting() {
     let s = Slot::new();
@@ -6686,6 +6690,21 @@ fn cdo_slot_status_says_a_draining_timing_is_starting() {
     assert!(
         !status.contains(starting),
         "committed, still starting: {status}"
+    );
+    // A stalled read of the commit mark (the test hook holds it 60 s) never
+    // holds the guard past its 30 s timeout, after which it would allow: the
+    // read is bounded, and the guard still refuses a build beside the timing
+    // (sol, TLS-160 r2).
+    let input = serde_json::json!({
+        "tool_name": "Bash",
+        "session_id": "B",
+        "tool_input": { "command": "cargo build" },
+    });
+    let (code, text) = s.guard_raw_env(&input.to_string(), &[("CDO_SLOT_TEST_MARK_STALL_S", "60")]);
+    assert_eq!(
+        code,
+        Some(2),
+        "the guard beside a timing, its mark read stalled: {text}"
     );
     drop(tm);
     until("free", &|| s.probe() == "held=0 own=0 timed=0");

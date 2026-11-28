@@ -188,10 +188,12 @@ suite's load. Each failure was a test defect: an assumption about how long a ste
 - **Status.** A timing before its commit point (still waiting for the builds already running) now
   reads `timed by X since T (reason); starting: it waits for running builds to end before it
   times`. A record with no commit id (an older cdo-slot) reads as before. The guard waits for this
-  line, so the commit mark is read only when it is a regular file (sol r1: a FIFO there would block
-  the read, the guard would time out and allow work beside a live timing).
-  `cdo_slot_status_says_a_draining_timing_is_starting` pins both, after the drain has named the
-  build it waits for.
+  line and ALLOWS when it times out (30 s), so the commit mark is read only when it is a regular
+  file, and within 2 s (`timeout -k 1 2 cat`; sol r1, r2: a FIFO, a file swapped in after the
+  check, or a slow read). A mark not read in time adds nothing to the line.
+  `cdo_slot_status_says_a_draining_timing_is_starting` pins it, after the drain has named the
+  build it waits for, and checks that the guard still refuses a build beside the timing while the
+  mark read is stalled 60 s (a test hook, `CDO_SLOT_TEST_MARK_STALL_S`).
 - **Tests and the real slot.** `clean_env` (every test's way to start a script) clears the
   environment, so a test that forgot its own `CDO_SLOT_DIR` ran its script against cdo-slot's
   default, the tentacle's real slot `/work/.al-sem/cdo-slot`. `clean_env` now sets `CDO_SLOT_DIR`
@@ -205,8 +207,11 @@ suite's load. Each failure was a test defect: an assumption about how long a ste
   it (`realpath -m`), its mode, and the floor.
 - **Proofs** (2026-11-28): the `CDO_SLOT_DIR` line dropped from `clean_env` -> the script resolves
   "/work/.al-sem/cdo-slot" (red); restored, green. The `starting` suffix never added in
-  `timed_describe` -> "a draining timing" lacks it (red); restored, green. The regular-file check
-  dropped -> "status blocked on a FIFO commit mark" (red, 122 s); restored, green (4.8 s).
+  `timed_describe` -> "a draining timing" lacks it (red); restored, green. The mark read's
+  `timeout` dropped -> the guard's probe "timed out after 30 seconds (allowed)" (red, 35 s); the
+  regular-file check and the `timeout` both dropped -> "status blocked on a FIFO commit mark" (red,
+  124 s; either alone keeps it from blocking); each restored, green (7.1 s). The throwaway folder
+  must canonicalize to an absolute path, or the test process stops (sol r2: no relative fallback).
   Seen in use the same night: `status` read "timed by tls163 since 23:50:21 (batch scaling);
   starting: it waits for running builds to end before it times" for 20+ min while that timing
   waited for another lane's test suite.

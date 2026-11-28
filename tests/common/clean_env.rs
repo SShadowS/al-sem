@@ -72,7 +72,8 @@ pub fn throwaway_slot() -> std::path::PathBuf {
         #[cfg(unix)]
         b.permissions(std::os::unix::fs::PermissionsExt::from_mode(0o700));
         let dir = b.tempdir().expect("make the throwaway slot folder").keep();
-        let dir = std::fs::canonicalize(&dir).unwrap_or(dir);
+        // Absolute, or no slot at all (sol r2): never a relative fallback.
+        let dir = std::fs::canonicalize(&dir).expect("an absolute throwaway slot folder");
         #[cfg(unix)]
         {
             extern "C" fn remove() {
