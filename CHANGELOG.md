@@ -7,6 +7,45 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed (TLS-163: perf-bounds' batch write check judged the host's cache, not the check)
+
+- **The failure.** `perf_bounds::batch_write_check_is_not_quadratic` timed `check_write_sets`
+  over 2,000 jobs against a 1 s bound that its doc said "cannot flake on a loaded runner". It
+  failed at moderate host load on server1 on 2026-11-27, on master too (1.09-1.82 s at host
+  `some` avg60 about 18 %; 1.38 s and 3.93 s in landings); it passed on a calm host. No branch
+  had touched batch code.
+- **The cause.** The check is not quadratic, and most of its time was not its jobs.
+  `check_write_sets` first snapshots the engine's cache folders (`cache_guard::take`,
+  TLS-116), which walks every file of the user's real text cache,
+  `~/.cache/al-ch-snapshot-cache`: 200,562 files (5.4 GB) on server1. An A/B at 2,000 jobs,
+  3 rounds interleaved, in a timed CDO slot hold: the real cache 927, 1,521 and 1,037 ms; an
+  empty cache (a fresh `XDG_CACHE_HOME`) 206, 345 and 236 ms. So the test measured the
+  host's cache, which grows, and passed only while the cache was small and the host calm. (A
+  first run at 1,000, 2,000 and 4,000 jobs against the real cache gave minimums of 491, 559
+  and 563 ms: a fixed cost, though its noise was as large as the differences.)
+- **The fix (the test).** Each sample now runs in a child process of the test binary (a new
+  helper test, `batch_write_check_child`, which does nothing unless its variable is set),
+  with `XDG_CACHE_HOME` set to an empty folder in the child's environment only. The child
+  checks that the text cache really is under that folder. The parent kills a child still
+  running after 120 s and fails, as a hang (it never waits on a hung child). The test asserts
+  the scaling, not a time: 5 interleaved samples each of 500 and 4,000 jobs, and the minimum
+  at 4,000 must be less than 20 times the minimum at 500. Linear is about x8 (a fixed cost
+  per call pulls it lower, a per-write cost that rises with the folder's size a little
+  higher); the pair scan it guards against is x64. The 1 s bound and the
+  doc's "cannot flake" claim are gone. Linux only (an early return elsewhere): `dirs::cache_dir`
+  reads `XDG_CACHE_HOME` only there.
+- **Measured and proven** (release-fast, in a timed CDO slot hold): five runs of this code
+  grew x7.413, x8.032, x9.936, x8.223 and x8.248 from 500 to 4,000 jobs (minimums 20-41 ms to
+  174-325 ms). Discrimination proof: with the per-workspace `taken` cache removed, so every
+  job checks every write (the old pair scan), the test failed at x56.148 (114 ms to 6.40 s);
+  restored, it passed. So the limit of 20 sits about 2x above this code and 2.8x below the
+  mutant. All runs were on a calm host (`some` avg60 4-5 %); none was measured above 20 %
+  pressure.
+- **Not fixed here.** Every `alsem batch` run pays the cache walk (about 0.5-1.2 s on
+  server1, growing), and many tests reach the user's real cache folders without isolating
+  them. Both are written up for a follow-up card in
+  `/work/.al-sem/tools-notes/TLS-163-followup-batch-cache-walk.md`.
+
 ### Fixed (ENG-218: FlowField and RecordRef tables, and a table's extensions, bind as the resolver binds them, not by name across all apps)
 
 - **The bug.** ENG-194 made record variables bind a table name as the program's resolver does, seen
