@@ -1330,6 +1330,16 @@ ran beside the timing).
   a record by value, `Copy` from an unloaded record. Its r2 found two gaps left by this change,
   filed as ENG-183: a copy whose source is loaded later in a loop (the text-order rule, on master
   too), and `asserterror` setting every tracked record to "may be loaded".
+- **CDO, final head (`cdo-before-after` 0ea800d4 against 49985266):** `--scope primary` 2306 →
+  2306, nothing moved; `--scope all` 32405 → 32416, 11 added and none removed (d11 283 → 292,
+  d21 937 → 939); unknown edges 0 → 0; census unchanged. Every added finding is past a failed
+  `Get`/`FindFirst` (the tested-load rule), triaged against source: the 9 d11 are `Validate` on
+  the create path before an `Insert` (Base Application's retention-policy setup, System
+  Application's `FindOrCreateRetentionPeriod`, a Continia CDN customer and vendor setup), the
+  class master already reports when no `Get` comes first (ENG-185: whether `Validate` before
+  `Insert` on a fresh record is a defect at all); the 2 d21 are `CalcSums` on the not-found branch
+  of the item-charge posting in PurchPost and SalesPost (ENG-179: `CalcSums` needs no loaded
+  record).
 - **Tests and red proofs.** `cli_d11_load_paths` runs `alsem analyze` on 35 shapes: silent where
   a branch, `case` (with or without a match), conditional expression or loop loads on one path
   (a later pass, `break`, `continue` included), a field write, a call result, a parameter, a
