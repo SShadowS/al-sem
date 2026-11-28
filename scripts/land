@@ -487,6 +487,10 @@ verdict() { # verdict <step> <exit> <start>
         # (e.g. cdo-gate's "speed ... FAIL" summary line). At most the last 8.
         if [[ -f "$run/$1.log" ]]; then
             grep -E 'FAIL|error[:[]' "$run/$1.log" | tail -n 8 | sed 's/^/land:   | /' || true
+            # ⟨TLS-149⟩ A failed perf-bounds verdict holds no FAIL ("timing: ...,
+            # exit 101; UNDER LOAD: ..."): quoted on its own, load and all.
+            grep -E '^ci-steps: perf-bounds timing: .*, exit [1-9][0-9]*;' "$run/$1.log" \
+                | tail -n 1 | sed 's/^/land:   | /' || true
         fi
         # ⟨TLS-87⟩ Said again where it matters (review r1, Fable): the check's
         # warning is 25 minutes of output back by now.

@@ -215,6 +215,83 @@ suite's load. Each failure was a test defect: an assumption about how long a ste
   (a dependency's `#if`-split tableextension triggers are not in the cross-app model), ENG-225
   (explain renders a split routine's card from its first alternative).
 
+### Fixed (TLS-149: `ci-steps perf-bounds` waits for a calm host and labels a loaded one)
+
+- **The gap.** perf-bounds checks wall-time bounds. Other projects on server1 load the whole
+  host, and this container's own CPU stall share (the only load the step measured) does not
+  see that. On 2026-11-27 TLS-122's landing, a scripts-only change, failed two bounds
+  (`compute_summaries_v2_bundle` 285 ms against 230 ms, `recursive_scc_db_effects` 764 ms
+  against 650 ms) with the cgroup share at 3 % while the host's `/proc/pressure/cpu`
+  `some avg300` read 36 %. The verdict gave no sign of it. TLS-135 failed the same two bounds
+  twice that day under the same load.
+- **The wait, as cdo-speed does it (TLS-76).** Inside its timed slot hold, before the test
+  binary runs, the step waits for the host's `some avg60` to fall to 15 % or less, polling
+  every 10 s for up to 600 s, then runs anyway. These are cdo-speed's limits and its knobs
+  (`CDO_SPEED_CALM_WAIT_S`, `CDO_SPEED_CALM_POLL_S`, `CDO_SPEED_HOST_PRESSURE_FILE`), so no new
+  variable. The budget is awake time (`scripts/awake-clock`, on CLOCK_MONOTONIC, so a suspend
+  does not use it up), and each nap is cut to what is left of it. The knobs must be finite
+  decimal seconds, read in base 10 (`08` is eight); anything else is refused before the slot is
+  taken. Each read of a pressure file is cut after 5 s, so a stuck file cannot hang the step,
+  and a read that failed or was cut gives nothing. A field counts only when all of it is a
+  number (`avg60=10junk` and `total=123junk` are not readings). The log says which way the wait
+  ended: calm, timed out, not readable (missing, malformed or gone while waiting), or no slot.
+  When a nap is cut to the budget, the log says how long it asked for. If the awake clock cannot
+  be read (awake-clock falls back to wall time), the log says the wait counts wall time, and the
+  timeout says so too. With no slot (a GitHub runner) there is no shared host, so it does not
+  wait. The wait holds the slot, so no lane builds while it lasts.
+- **The label.** The verdict line now gives two stall shares over the run: this cgroup's and
+  the host's. Each comes from its own file, read at both ends of the run (`some total=`
+  microseconds), never one file in place of the other. A malformed total, or one that went
+  backwards, gives no share. Each share has its own interval: every reading sits between two
+  awake-clock readings, so the time between a source's two readings is known within those
+  brackets. The share is taken over the longest interval the brackets allow, so a slow reading
+  can only lower it, as long as every clock reading in its brackets is fresh. A failed clock
+  read reuses the last time (awake-clock does this on the first two failures in a row), which
+  would shorten that interval and could make load that was not there: a share whose brackets
+  hold a failed reading is not available (sol r3; Fable r1 reproduced a false 23 % from a
+  failed reading). When a source's brackets cover more than a quarter of its
+  interval, it gets no share ("not available"). With no awake clock there are no shares (wall
+  time is not awake time). A share above 15 %,
+  or a wait that ran out, labels it `UNDER LOAD:` followed by what was observed; the
+  timed-out wait is said even when no share could be read. The verdict stays the test
+  binary's: a failure under load is still a failure, and no bound moved. There is no
+  automatic retry (owner and sol, 2026-11-27): a calm reading before a second run does not
+  prove that run stayed calm, and its pass would turn the failure into a gate pass.
+- **land quotes it.** On a red ci, `scripts/land` quotes the failed perf-bounds verdict line
+  under its own (`exit 101; UNDER LOAD: ...`). That line has no `FAIL` in it, so land's filter
+  missed it.
+- **The tests.** `gate_scripts::perf_bounds_labels_host_load`: a host share of ~57 % labels a
+  failing run UNDER LOAD and its exit stays 101; a calm host gives both shares and no label.
+  `perf_bounds_waits_for_a_calm_host`, each run under a watchdog: the fixture moves from 15.01 %
+  to 15.00 % only after the step said it was waiting, with its hold marked timed and the binary
+  not started, and the binary runs after "calm enough"; a host that stays loaded with a 600 s
+  poll against a 5 s budget asks for a nap of at most the 5 s left (from the log), then runs,
+  labelled; a source that goes while waiting, or is missing, gives "calm not known"; no wait
+  with no slot. `perf_bounds_reads_psi_fields_whole`: `10junk` and `123junk` are not readings.
+  `perf_bounds_aligns_each_share_to_its_own_readings`: after a 6 s run, a host reading held
+  ~3 s by a FIFO, while this cgroup stalls 1 s, gives the host no share and the cgroup at most
+  ~11 % over its own ~9 s, not ~17 % over the 6 s run. `perf_bounds_says_when_the_awake_clock_fails`:
+  no shares, and the wait and its timeout say wall time.
+  `perf_bounds_gives_no_share_from_a_failed_clock_reading`: only the clock reading after the
+  host's slow last reading fails; both shares that use it are not available, there is no
+  UNDER LOAD, and the exit stays the binary's. Each watchdog allows 300 s. Every test that expects a share runs
+  its stand-in for at least 6 awake seconds (`SHARE_RUN_S`). That is enough for the quarter rule
+  to hold even if each clock read took 10x the ~100 ms measured under load: two 1 s brackets
+  need an interval of 8 s, and the run is 6 s of it. The suspend test stalls 24 % of its awake
+  time, so its label holds with up to 3.6 s of brackets.
+  `perf_bounds_checks_its_wait_knobs`: `08` and `09.5` work; `inf`, `1e3`, `0` and `-1` are
+  refused before the slot. `perf_bounds_shares_cdo_speeds_calm_limits`: the threshold and the
+  wait and poll defaults are cdo-speed's. `land_script::land_quotes_a_failed_perf_bounds_verdict`:
+  a failed verdict is quoted, a passing one is not. The tests that run a real
+  `ci-steps perf-bounds` in a slot now give it no host pressure, so they do not wait for the
+  real host. Four discrimination proofs, each failing with its break and passing once restored:
+  the wait call removed, the host's share removed, this cgroup's share given only the run's
+  interval (it read 16 %, UNDER LOAD), and land's new quote removed. Six more, from the review
+  round: the failed-clock check removed (a false 23 %, UNDER LOAD), the nap not cut (the
+  watchdog fired at 300 s), the whole-field parse loosened (`10junk` read as calm), shares
+  allowed on wall time, `<=` made `<` at 15.00 (never calm), and the suspend test's share
+  taken over wall time (14 %, no label).
+
 ### Fixed (TLS-145: a test that failed when a worker exited before reading its input)
 
 - `cli_ir_cache::a_worker_without_a_good_snapshot_fails_closed` could fail with `BrokenPipe`.
