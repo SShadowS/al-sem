@@ -6520,6 +6520,27 @@ fn scripts_see_none_of_the_callers_environment() {
     assert!(text.contains("env probe: ran"), "{text}");
 }
 
+/// ⟨TLS-160⟩ A script started through `clean_env` with no slot folder of its
+/// own never reaches the tentacle's real slot (cdo-slot's default
+/// /work/.al-sem/cdo-slot): it gets this test process's throwaway folder.
+///
+/// Mutation (2026-11-28): the `CDO_SLOT_DIR` line dropped from `clean_env`
+/// -> the script sees no CDO_SLOT_DIR (red); restored, green.
+#[test]
+fn a_script_without_its_own_slot_never_reaches_the_real_one() {
+    let out = crate::clean_env::command("bash")
+        .args(["-c", "printf %s \"${CDO_SLOT_DIR:-}\""])
+        .output()
+        .unwrap();
+    let seen = String::from_utf8_lossy(&out.stdout).into_owned();
+    assert_eq!(
+        std::path::Path::new(&seen),
+        crate::clean_env::throwaway_slot(),
+        "the slot folder a script sees: {seen:?}"
+    );
+    assert!(!seen.starts_with("/work/.al-sem"), "{seen}");
+}
+
 /// The child half of `scripts_see_none_of_the_callers_environment`; nothing
 /// outside it (no `TLS115_ENV_PROBE`).
 #[cfg(target_os = "linux")]

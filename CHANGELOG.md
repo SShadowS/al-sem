@@ -178,6 +178,29 @@ suite's load. Each failure was a test defect: an assumption about how long a ste
 - **Filed.** ENG-230 (the snapshot writes a colliding tableextension stub's rows under the real
   table's stable ids).
 
+### Fixed (TLS-160: tests never reach the real CDO slot; status says when a timing is still starting)
+
+- **What was seen.** On 2026-11-27 a timed hold looked as if it started beside a running test suite:
+  `cdo-slot status` said "timed by before-after since 17:37:55" while the suite ran. The drain was
+  right: the timing's commit mark (`commit/<id>`) was written at 17:45:16, 3 s (the grace) after the
+  last build record went at 17:45:13, when the suite was killed. "since" is the time the timing was
+  TAKEN, before its drain; status showed a draining timing exactly like a running one.
+- **Status.** A timing before its commit point (still waiting for the builds already running) now
+  reads `timed by X since T (reason); starting: it waits for running builds to end before it
+  times`. A record with no commit id (an older cdo-slot) reads as before.
+  `cdo_slot_status_says_a_draining_timing_is_starting` pins it.
+- **Tests and the real slot.** `clean_env` (every test's way to start a script) clears the
+  environment, so a test that forgot its own `CDO_SLOT_DIR` ran its script against cdo-slot's
+  default, the tentacle's real slot `/work/.al-sem/cdo-slot`. `clean_env` now sets `CDO_SLOT_DIR`
+  to the test process's throwaway folder (`$TMPDIR/alsem-test-slot.<pid>`); a test's own setting,
+  made after it, still wins. `a_script_without_its_own_slot_never_reaches_the_real_one` pins it.
+- **Proofs** (2026-11-28): the `CDO_SLOT_DIR` line dropped from `clean_env` -> "the slot folder
+  a script sees: \"\"" (red); restored, green (0.05 s). The `starting` suffix never added in
+  `timed_describe` -> "never: the drain shows in status" (red, 60 s); restored, green (11.4 s).
+  Seen in use the same night: `status` read "timed by tls163 since 23:50:21 (batch scaling);
+  starting: it waits for running builds to end before it times" for 20+ min while that timing
+  waited for another lane's test suite.
+
 ### Fixed (ENG-218: FlowField and RecordRef tables, and a table's extensions, bind as the resolver binds them, not by name across all apps)
 
 - **The bug.** ENG-194 made record variables bind a table name as the program's resolver does, seen

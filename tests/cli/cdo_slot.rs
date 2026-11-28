@@ -6595,6 +6595,45 @@ fn cdo_slot_a_refused_timing_keeps_its_record_while_held() {
     until("the timing ends", &|| s.probe().ends_with("timed=0"));
 }
 
+/// ⟨TLS-160⟩ While a timing drains (waits for the builds already running,
+/// before its commit point), `status` says it is starting: its "since" is the
+/// take, not the start of timing (TLS-160: read as a timing beside a build).
+/// Once committed, the line says no more.
+///
+/// Mutation (2026-11-28): the `starting` suffix dropped from timed_describe
+/// -> the draining line lacks it (red); restored, green.
+#[test]
+fn cdo_slot_status_says_a_draining_timing_is_starting() {
+    let s = Slot::new();
+    let fake_name = format!("t160d{}", std::process::id());
+    let fake = s.0.path().join(&fake_name);
+    std::os::unix::fs::symlink("/bin/bash", &fake).unwrap();
+    let build = stand_in(&s, &fake, &["-c".as_ref(), "sleep 600; true".as_ref()]);
+    let tm = sleeper();
+    let tpid = tm.id().to_string();
+    let mut drained = spawn_piped(
+        &s,
+        "A",
+        &["acquire", "lane", "drained", "--bind", &tpid, "--timed"],
+        &[("CDO_SLOT_BUILD_NAMES", fake_name.as_str())],
+    );
+    let starting = "; starting: it waits for running builds to end before it times";
+    until("the drain shows in status", &|| {
+        s.run("B", &["status"], &[]).1.contains(starting)
+    });
+    drop(build);
+    let code = drained.0.wait().unwrap().code();
+    assert_eq!(code, Some(0), "{}", piped_text(&mut drained.0));
+    let (_, status) = s.run("B", &["status"], &[]);
+    assert!(status.contains("timed by lane since"), "{status}");
+    assert!(
+        !status.contains(starting),
+        "committed, still starting: {status}"
+    );
+    drop(tm);
+    until("free", &|| s.probe() == "held=0 own=0 timed=0");
+}
+
 /// ⟨TLS-135 review r11, sol; Fable⟩ The process to time is checked again right
 /// before the publication, under the gate (its start time from --bind's one
 /// read), and on every round of the drain: one that ended meanwhile is

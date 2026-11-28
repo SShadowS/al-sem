@@ -41,13 +41,26 @@ pub fn clean_env(cmd: &mut Command) -> &mut Command {
             cmd.env(k, v);
         }
     }
-    cmd.env("LANG", "C.UTF-8")
+    // ⟨TLS-160⟩ Never the tentacle's real slot (cdo-slot's default,
+    // /work/.al-sem/cdo-slot): a test that forgets its own slot folder gets
+    // this process's throwaway one instead; a test's own CDO_SLOT_DIR, set
+    // after this, wins.
+    // shortcut: one small folder per test process stays in TMPDIR; clean it up
+    // here if TMPDIR ever fills.
+    cmd.env("CDO_SLOT_DIR", throwaway_slot())
+        .env("LANG", "C.UTF-8")
         .env("GIT_CONFIG_GLOBAL", "/dev/null")
         .env("GIT_CONFIG_NOSYSTEM", "1")
         .env("GIT_AUTHOR_NAME", "t")
         .env("GIT_AUTHOR_EMAIL", "t@t")
         .env("GIT_COMMITTER_NAME", "t")
         .env("GIT_COMMITTER_EMAIL", "t@t")
+}
+
+/// This test process's throwaway slot folder (TLS-160): in TMPDIR, named by
+/// its PID, made by cdo-slot only when a script uses it.
+pub fn throwaway_slot() -> std::path::PathBuf {
+    std::env::temp_dir().join(format!("alsem-test-slot.{}", std::process::id()))
 }
 
 /// `Command::new(program)` with [`clean_env`] applied.
